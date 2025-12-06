@@ -27,8 +27,6 @@ const Footer: React.FC = () => {
                 NSEC Official Website <ExternalLink className="h-3 w-3" />
               </a>
             </li>
-            <li><a href="https://www.nsec.ac.in/page.php?id=37" target="_blank" rel="noreferrer" className="hover:underline">Admissions 2025-26</a></li>
-            <li><a href="https://www.nsec.ac.in/page.php?id=38" target="_blank" rel="noreferrer" className="hover:underline">Academics</a></li>
           </ul>
         </div>
         
