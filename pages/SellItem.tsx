@@ -1,11 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone } from 'lucide-react';
+import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, X } from 'lucide-react';
 import "firebase/compat/storage"; 
 
 interface SellItemProps {
@@ -30,7 +30,18 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     whatsappNumber: profile?.phoneNumber || ''
   });
   
+  // We store the actual file/blob for uploading, and a string URL for previewing
+  const [imageFile, setImageFile] = useState<Blob | File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  // Clean up object URLs to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -44,10 +55,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
-  // --- SIMPLE & AGGRESSIVE IMAGE RESIZER ---
-  // Reduces image to max 500px and 0.5 quality to ensure tiny file size (~50KB)
-  // This prevents upload timeouts on mobile networks.
-  const resizeImage = (file: File): Promise<string> => {
+  // --- ROBUST IMAGE RESIZER (Returns Blob) ---
+  const resizeImage = (file: File): Promise<Blob> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
@@ -56,7 +65,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_SIZE = 500; // Very small to ensure success
+          const MAX_SIZE = 600; // Safe size for mobile uploads
           let width = img.width;
           let height = img.height;
 
@@ -77,8 +86,14 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
           
-          // Compress heavily (0.5)
-          resolve(canvas.toDataURL('image/jpeg', 0.5));
+          // Convert to Blob (Binary) instead of Base64 string for better upload performance
+          canvas.toBlob((blob) => {
+            if (blob) {
+                resolve(blob);
+            } else {
+                reject(new Error("Canvas conversion failed"));
+            }
+          }, 'image/jpeg', 0.7);
         };
         img.onerror = (err) => reject(err);
       };
@@ -95,20 +110,18 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         return;
       }
 
-      setUploadStatus('Processing image...');
+      setUploadStatus('Preparing image...');
       try {
-        const resizedBase64 = await resizeImage(file);
-        setImagePreview(resizedBase64);
+        const resizedBlob = await resizeImage(file);
+        setImageFile(resizedBlob);
+        setImagePreview(URL.createObjectURL(resizedBlob));
         setUploadStatus(''); 
       } catch (err) {
         console.error("Resize failed", err);
-        // Fallback to original if resize fails
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (ev) => {
-            setImagePreview(ev.target?.result as string);
-            setUploadStatus('Using original image.');
-        };
+        // Fallback: Use original file if resize fails
+        setImageFile(file);
+        setImagePreview(URL.createObjectURL(file));
+        setUploadStatus('Using original image.');
       }
     }
   };
@@ -134,7 +147,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     e.preventDefault();
     
     // Validation
-    if (!imagePreview) {
+    if (!imageFile) {
       alert("Please upload an image of the item.");
       return;
     }
@@ -148,64 +161,70 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     setLoading(true);
+    setUploadStatus('Initializing upload...');
     
-    // 1. UPLOAD IMAGE
-    const fileName = `products/${user.uid}/${Date.now()}`;
+    // 1. UPLOAD IMAGE (Using PUT for Blob support)
+    const fileName = `products/${user.uid}/${Date.now()}.jpg`;
     const storageRef = storage.ref().child(fileName);
-    const uploadTask = storageRef.putString(imagePreview, 'data_url');
+    
+    try {
+        const uploadTask = storageRef.put(imageFile);
 
-    // Monitor Progress
-    uploadTask.on('state_changed', 
-        (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            setUploadStatus(`Uploading... ${Math.round(progress)}%`);
-        },
-        (error) => {
-            // Handle Errors
-            console.error("Upload error:", error);
-            setLoading(false);
-            alert(`Upload Failed: ${error.message}. Please try again.`);
-        },
-        async () => {
-            // Upload Complete
-            try {
-                setUploadStatus('Saving details...');
-                const imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
-
-                // 2. SAVE TO DATABASE
-                const price = formData.isFree ? 0 : Number(formData.price);
-                const originalPrice = formData.condition === 'used' && formData.originalPrice 
-                  ? Number(formData.originalPrice) 
-                  : undefined;
-
-                await db.collection(COLLECTIONS.PRODUCTS).add({
-                  sellerId: user.uid,
-                  sellerName: profile.displayName || 'Student',
-                  sellerWhatsapp: formData.whatsappNumber,
-                  title: formData.title,
-                  description: formData.description || 'No description provided.',
-                  category: formData.category,
-                  condition: formData.condition,
-                  price: price,
-                  originalPrice: originalPrice || null,
-                  isFree: formData.isFree,
-                  imageUrl: imageUrl,
-                  createdAt: Date.now(),
-                });
-
-                setUploadStatus('Success!');
-                // Slight delay so user sees "Success"
-                setTimeout(() => {
-                    navigate('/');
-                }, 1000);
-
-            } catch (dbError: any) {
-                console.error("Database error:", dbError);
+        // Monitor Progress
+        uploadTask.on('state_changed', 
+            (snapshot) => {
+                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                setUploadStatus(`Uploading... ${Math.round(progress)}%`);
+            },
+            (error) => {
+                // Handle Errors
+                console.error("Upload error:", error);
                 setLoading(false);
-                alert("Image uploaded but failed to save details: " + dbError.message);
+                alert(`Upload Failed: ${error.message}. Check your connection.`);
+            },
+            async () => {
+                // Upload Complete
+                try {
+                    setUploadStatus('Saving item details...');
+                    const imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
+
+                    // 2. SAVE TO DATABASE
+                    const price = formData.isFree ? 0 : Number(formData.price);
+                    const originalPrice = formData.condition === 'used' && formData.originalPrice 
+                    ? Number(formData.originalPrice) 
+                    : undefined;
+
+                    await db.collection(COLLECTIONS.PRODUCTS).add({
+                    sellerId: user.uid,
+                    sellerName: profile.displayName || 'Student',
+                    sellerWhatsapp: formData.whatsappNumber,
+                    title: formData.title,
+                    description: formData.description || 'No description provided.',
+                    category: formData.category,
+                    condition: formData.condition,
+                    price: price,
+                    originalPrice: originalPrice || null,
+                    isFree: formData.isFree,
+                    imageUrl: imageUrl,
+                    createdAt: Date.now(),
+                    });
+
+                    setUploadStatus('Success!');
+                    setTimeout(() => {
+                        navigate('/');
+                    }, 1000);
+
+                } catch (dbError: any) {
+                    console.error("Database error:", dbError);
+                    setLoading(false);
+                    alert("Image uploaded but failed to save details: " + dbError.message);
+                }
             }
-        }
-    );
+        );
+    } catch (startError: any) {
+        setLoading(false);
+        alert("Could not start upload: " + startError.message);
+    }
   };
 
   const savings = (formData.condition === 'used' && formData.originalPrice && formData.price && !formData.isFree)
@@ -427,12 +446,10 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                    <img src={imagePreview} alt="Preview" className="h-48 object-contain rounded-md" />
                    <button 
                      type="button" 
-                     onClick={() => { setImagePreview(null); }}
+                     onClick={() => { setImageFile(null); setImagePreview(null); }}
                      className="absolute -top-2 -right-2 bg-white text-gray-500 border border-gray-200 rounded-full p-1 hover:text-red-500 shadow-sm"
                    >
-                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                     </svg>
+                     <X className="h-4 w-4" />
                    </button>
                 </div>
               ) : (
@@ -447,7 +464,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">JPG, PNG (Max 500px, Auto-resized)</p>
+                  <p className="text-xs text-gray-500">JPG, PNG (Max 600px, Auto-resized)</p>
                 </div>
               )}
             </div>
