@@ -1,11 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, X, Settings } from 'lucide-react';
+import { Sparkles, Upload, Loader2, ChevronLeft, Phone, X, AlertCircle } from 'lucide-react';
 import "firebase/compat/storage"; 
 
 interface SellItemProps {
@@ -16,12 +16,9 @@ interface SellItemProps {
 const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState('Idle');
-  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [generatingDesc, setGeneratingDesc] = useState(false);
-  
-  // Settings
-  const [useCompression, setUseCompression] = useState(true);
   
   const [formData, setFormData] = useState({
     title: '',
@@ -34,20 +31,14 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     whatsappNumber: profile?.phoneNumber || ''
   });
   
-  const [imageFile, setImageFile] = useState<Blob | File | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const addLog = (msg: string) => {
-    console.log(msg);
-    setDebugLog(prev => [...prev, `${new Date().toLocaleTimeString()}: ${msg}`]);
-    setStatus(msg);
-  };
-
+  // Cleanup object URL
   useEffect(() => {
     return () => {
-      if (imagePreview && imagePreview.startsWith('blob:')) {
-        URL.revokeObjectURL(imagePreview);
-      }
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
     };
   }, [imagePreview]);
 
@@ -63,83 +54,64 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
-  const resizeImage = (file: File): Promise<Blob> => {
-    return new Promise((resolve, reject) => {
-      // Timeout safety
-      const timer = setTimeout(() => {
-          reject(new Error("Compression timed out"));
-      }, 3000);
-
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          clearTimeout(timer);
-          try {
-            const canvas = document.createElement('canvas');
-            const MAX_SIZE = 600; 
-            let width = img.width;
-            let height = img.height;
-
-            if (width > height) {
-              if (width > MAX_SIZE) {
-                height *= MAX_SIZE / width;
-                width = MAX_SIZE;
-              }
-            } else {
-              if (height > MAX_SIZE) {
-                width *= MAX_SIZE / height;
-                height = MAX_SIZE;
-              }
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx?.drawImage(img, 0, 0, width, height);
-            
-            canvas.toBlob((blob) => {
-              if (blob) {
-                  resolve(blob);
-              } else {
-                  reject(new Error("Canvas blob conversion failed"));
-              }
-            }, 'image/jpeg', 0.6);
-          } catch (e) {
-            reject(e);
-          }
-        };
-        img.onerror = (err) => { clearTimeout(timer); reject(err); };
-      };
-      reader.onerror = (err) => { clearTimeout(timer); reject(err); };
-    });
-  };
-
-  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      addLog(`Selected file: ${file.name} (${Math.round(file.size/1024)}KB)`);
-      
-      if (useCompression) {
-        addLog('Attempting compression...');
-        try {
-            const resized = await resizeImage(file);
-            setImageFile(resized);
-            setImagePreview(URL.createObjectURL(resized));
-            addLog(`Compression success: ${Math.round(resized.size/1024)}KB`);
-        } catch (e: any) {
-            addLog(`Compression failed: ${e.message}. Using original.`);
-            setImageFile(file);
-            setImagePreview(URL.createObjectURL(file));
-        }
-      } else {
-          addLog('Compression disabled. Using original.');
-          setImageFile(file);
-          setImagePreview(URL.createObjectURL(file));
-      }
+      setSelectedFile(file);
+      setImagePreview(URL.createObjectURL(file));
     }
+  };
+
+  // Safe Resize Function - Returns original file if resize fails/times out
+  const prepareImageForUpload = async (file: File): Promise<Blob | File> => {
+    // If small enough, don't touch it
+    if (file.size < 1024 * 1024) { // 1MB
+        return file;
+    }
+
+    setUploadStatus("Optimizing image...");
+    
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+            console.warn("Resize timed out, using original");
+            resolve(file);
+        }, 2000); // 2 second timeout max
+
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        
+        img.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 800;
+                const scale = MAX_WIDTH / img.width;
+                const width = scale < 1 ? MAX_WIDTH : img.width;
+                const height = scale < 1 ? img.height * scale : img.height;
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(img, 0, 0, width, height);
+
+                canvas.toBlob((blob) => {
+                    clearTimeout(timer);
+                    if (blob) {
+                        resolve(blob);
+                    } else {
+                        resolve(file);
+                    }
+                }, 'image/jpeg', 0.7);
+            } catch (e) {
+                clearTimeout(timer);
+                resolve(file);
+            }
+        };
+
+        img.onerror = () => {
+            clearTimeout(timer);
+            resolve(file);
+        };
+    });
   };
 
   const handleGenerateDescription = async () => {
@@ -148,13 +120,10 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       return;
     }
     setGeneratingDesc(true);
-    addLog('Requesting AI description...');
     try {
       const desc = await generateProductDescription(formData.title, formData.condition, formData.category);
       setFormData(prev => ({ ...prev, description: desc }));
-      addLog('AI description generated.');
-    } catch (error: any) {
-      addLog('AI Error: ' + error.message);
+    } catch (error) {
       alert("Could not generate description.");
     } finally {
       setGeneratingDesc(false);
@@ -163,47 +132,58 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!imageFile) { alert("Please upload an image."); return; }
+    if (!selectedFile) { alert("Please upload an image."); return; }
     if (!formData.title) { alert("Please enter a title."); return; }
     if (!formData.whatsappNumber) { alert("WhatsApp number required."); return; }
     
     setLoading(true);
-    addLog('Starting submission...');
-    
-    // 1. UPLOAD IMAGE
-    const fileName = `item_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
-    addLog(`Uploading to: ${fileName}`);
-    
-    const storageRef = storage.ref().child(fileName);
+    setUploadProgress(0);
     
     try {
-        const uploadTask = storageRef.put(imageFile);
+        // 1. Prepare Image
+        const fileToUpload = await prepareImageForUpload(selectedFile);
+        
+        // 2. Upload to Firebase Storage
+        const fileName = `${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+        // Store in a user-specific folder to keep things organized
+        const storagePath = `products/${user.uid}/${fileName}`;
+        const storageRef = storage.ref().child(storagePath);
+        
+        setUploadStatus("Starting upload...");
+        
+        const uploadTask = storageRef.put(fileToUpload, {
+            contentType: 'image/jpeg', // Explicitly set content type
+            customMetadata: {
+                uploader: user.uid
+            }
+        });
 
-        uploadTask.on('state_changed', 
+        uploadTask.on(
+            "state_changed",
             (snapshot) => {
                 const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                setStatus(`Uploading Image... ${Math.round(progress)}%`);
+                setUploadProgress(progress);
+                setUploadStatus(`Uploading... ${Math.round(progress)}%`);
             },
             (error) => {
                 console.error("Upload error:", error);
-                addLog('Upload Error: ' + error.message);
                 setLoading(false);
+                setUploadStatus("Upload failed.");
                 alert(`Upload Failed: ${error.message}`);
             },
             async () => {
-                addLog('Upload complete. Getting URL...');
+                // Upload Complete
+                setUploadStatus("Processing...");
                 try {
-                    const imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
-                    addLog('Image URL retrieved.');
-
-                    // 2. SAVE TO DATABASE
+                    const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
+                    
+                    // 3. Save to Firestore
                     const price = formData.isFree ? 0 : Number(formData.price || 0);
                     const originalPrice = formData.condition === 'used' && formData.originalPrice 
-                    ? Number(formData.originalPrice) 
-                    : null;
+                        ? Number(formData.originalPrice) 
+                        : null;
 
-                    const productData = {
+                    await db.collection(COLLECTIONS.PRODUCTS).add({
                         sellerId: user.uid,
                         sellerName: profile.displayName || 'Student',
                         sellerWhatsapp: formData.whatsappNumber,
@@ -214,38 +194,26 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                         price: price,
                         originalPrice: originalPrice,
                         isFree: formData.isFree,
-                        imageUrl: imageUrl, // Safe URL
+                        imageUrl: downloadURL,
                         createdAt: Date.now(),
-                    };
+                    });
 
-                    addLog('Saving to Firestore...');
-                    // Use sanitize to remove undefined
-                    const sanitizedData = JSON.parse(JSON.stringify(productData)); 
-                    
-                    await db.collection(COLLECTIONS.PRODUCTS).add(sanitizedData);
-                    
-                    addLog('Saved successfully!');
-                    setStatus('Success! Redirecting...');
-                    setTimeout(() => navigate('/'), 1500);
-
+                    setUploadStatus("Success!");
+                    setTimeout(() => navigate('/'), 500);
                 } catch (dbError: any) {
-                    console.error("DB Error:", dbError);
-                    addLog('DB Save Error: ' + dbError.message);
+                    console.error("Database error:", dbError);
                     setLoading(false);
-                    alert("Image uploaded, but saving details failed: " + dbError.message);
+                    alert("Image uploaded but failed to save details. Please try again.");
                 }
             }
         );
-    } catch (startError: any) {
-        addLog('Init Error: ' + startError.message);
+
+    } catch (err: any) {
+        console.error("Submission error:", err);
         setLoading(false);
-        alert("Could not start upload: " + startError.message);
+        alert(`Error: ${err.message}`);
     }
   };
-
-  const savings = (formData.condition === 'used' && formData.originalPrice && formData.price && !formData.isFree)
-    ? Number(formData.originalPrice) - Number(formData.price)
-    : 0;
 
   return (
     <div className="bg-gray-100 min-h-screen py-6 px-4 sm:px-6 lg:px-8">
@@ -262,31 +230,27 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           
           {/* Title */}
           <div>
-            <label htmlFor="title" className="block text-sm font-bold text-gray-700">
-              Product Name / Title
-            </label>
+            <label className="block text-sm font-bold text-gray-700">Product Name</label>
             <input
               type="text"
               name="title"
-              id="title"
               required
               value={formData.title}
               onChange={handleChange}
-              className="mt-1 shadow-sm focus:ring-[#febd69] focus:border-[#febd69] block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-[#febd69] focus:border-[#febd69]"
               placeholder="e.g. Engineering Mathematics Vol 1"
             />
           </div>
 
           {/* Category & Condition */}
-          <div className="grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="category" className="block text-sm font-bold text-gray-700">Category</label>
+              <label className="block text-sm font-bold text-gray-700">Category</label>
               <select
-                id="category"
                 name="category"
                 value={formData.category}
                 onChange={handleChange}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-[#febd69] focus:border-[#febd69] sm:text-sm rounded-md border"
+                className="mt-1 block w-full border border-gray-300 rounded-md p-2"
               >
                 <option>Books</option>
                 <option>Electronics</option>
@@ -298,15 +262,13 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 <option>Other</option>
               </select>
             </div>
-
             <div>
-              <label htmlFor="condition" className="block text-sm font-bold text-gray-700">Condition</label>
+              <label className="block text-sm font-bold text-gray-700">Condition</label>
               <select
-                id="condition"
                 name="condition"
                 value={formData.condition}
                 onChange={handleChange}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-[#febd69] focus:border-[#febd69] sm:text-sm rounded-md border"
+                className="mt-1 block w-full border border-gray-300 rounded-md p-2"
               >
                 <option value="used">Used / Second Hand</option>
                 <option value="new">Brand New</option>
@@ -316,46 +278,42 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
           {/* Pricing */}
           <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
-             <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Pricing</h3>
              <div className="flex items-center mb-4">
                 <input
-                  id="isFree"
                   name="isFree"
                   type="checkbox"
                   checked={formData.isFree}
                   onChange={handleCheckboxChange}
-                  className="h-4 w-4 text-[#febd69] focus:ring-[#febd69] border-gray-300 rounded"
+                  className="h-4 w-4 text-[#febd69] border-gray-300 rounded"
                 />
-                <label htmlFor="isFree" className="ml-2 block text-sm text-gray-900 font-bold">
-                  Give away for Free (Donation)
-                </label>
+                <label className="ml-2 block text-sm font-bold text-gray-900">Give away for Free</label>
              </div>
 
              {!formData.isFree && (
-                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                 <div className="grid grid-cols-2 gap-4">
                     {formData.condition === 'used' && (
                         <div>
-                        <label className="block text-sm font-medium text-gray-500">Original MRP (₹)</label>
-                        <input
-                            type="number"
-                            name="originalPrice"
-                            value={formData.originalPrice}
-                            onChange={handleChange}
-                            className="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md border p-2"
-                        />
+                            <label className="block text-xs font-medium text-gray-500 uppercase">Original Price (₹)</label>
+                            <input
+                                type="number"
+                                name="originalPrice"
+                                value={formData.originalPrice}
+                                onChange={handleChange}
+                                className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+                            />
                         </div>
                     )}
                     <div>
-                    <label className="block text-sm font-bold text-gray-900">Selling Price (₹)</label>
-                    <input
-                        type="number"
-                        name="price"
-                        required
-                        min="0"
-                        value={formData.price}
-                        onChange={handleChange}
-                        className="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md border p-2"
-                    />
+                        <label className="block text-xs font-bold text-gray-900 uppercase">Selling Price (₹)</label>
+                        <input
+                            type="number"
+                            name="price"
+                            required
+                            min="0"
+                            value={formData.price}
+                            onChange={handleChange}
+                            className="mt-1 block w-full border border-gray-300 rounded-md p-2"
+                        />
                     </div>
                  </div>
              )}
@@ -374,7 +332,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 required
                 value={formData.whatsappNumber}
                 onChange={handleChange}
-                className="focus:ring-[#febd69] focus:border-[#febd69] block w-full pl-10 sm:text-sm border-gray-300 rounded-md border p-2"
+                className="pl-10 block w-full border border-gray-300 rounded-md p-2"
               />
             </div>
           </div>
@@ -387,80 +345,78 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 type="button"
                 onClick={handleGenerateDescription}
                 disabled={generatingDesc}
-                className="inline-flex items-center px-3 py-1 border border-purple-200 text-xs font-medium rounded-full text-purple-700 bg-purple-50 hover:bg-purple-100"
+                className="text-xs text-purple-700 bg-purple-50 px-3 py-1 rounded-full border border-purple-200 flex items-center"
               >
                 {generatingDesc ? <Loader2 className="animate-spin h-3 w-3 mr-1"/> : <Sparkles className="h-3 w-3 mr-1" />}
-                Auto-Generate
+                AI Generate
               </button>
             </div>
             <textarea
               name="description"
-              rows={4}
+              rows={3}
               required
               value={formData.description}
               onChange={handleChange}
-              className="shadow-sm focus:ring-[#febd69] focus:border-[#febd69] block w-full sm:text-sm border-gray-300 rounded-md border p-2"
+              className="block w-full border border-gray-300 rounded-md p-2 shadow-sm"
+              placeholder="Describe the item condition, edition, etc."
             />
           </div>
 
           {/* Image Upload */}
           <div>
-            <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-bold text-gray-700">Upload Photo</label>
-                <div className="flex items-center text-xs text-gray-500">
-                    <input 
-                        type="checkbox" 
-                        checked={useCompression} 
-                        onChange={e => setUseCompression(e.target.checked)} 
-                        className="mr-1"
-                    />
-                    <label>Compress Image</label>
-                </div>
-            </div>
+            <label className="block text-sm font-bold text-gray-700 mb-2">Item Photo</label>
             
-            <div className="flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md bg-gray-50">
+            <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md bg-white hover:bg-gray-50 transition-colors cursor-pointer"
+                 onClick={() => fileInputRef.current?.click()}>
+              
               {imagePreview ? (
                 <div className="relative">
                    <img src={imagePreview} alt="Preview" className="h-48 object-contain rounded-md" />
-                   <button 
-                     type="button" 
-                     onClick={() => { setImageFile(null); setImagePreview(null); }}
-                     className="absolute -top-2 -right-2 bg-white text-gray-500 border border-gray-200 rounded-full p-1 hover:text-red-500 shadow-sm"
-                   >
-                     <X className="h-4 w-4" />
-                   </button>
+                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 hover:bg-opacity-10 transition-all rounded-md">
+                      <span className="bg-white text-gray-700 text-xs px-2 py-1 rounded shadow opacity-0 hover:opacity-100">Change Photo</span>
+                   </div>
                 </div>
               ) : (
                 <div className="space-y-1 text-center">
                   <Upload className="mx-auto h-12 w-12 text-gray-400" />
-                  <div className="flex text-sm text-gray-600 justify-center">
-                    <label className="relative cursor-pointer bg-white rounded-md font-medium text-[#c45500] hover:text-[#b12704]">
-                      <span>Select Image</span>
-                      <input type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
-                    </label>
+                  <div className="text-sm text-gray-600">
+                    <span className="font-medium text-blue-600 hover:text-blue-500">Click to Upload</span>
                   </div>
-                  <p className="text-xs text-gray-500">Max 5MB</p>
+                  <p className="text-xs text-gray-500">JPG, PNG up to 10MB</p>
                 </div>
               )}
+              <input 
+                type="file" 
+                ref={fileInputRef}
+                className="hidden" 
+                accept="image/*" 
+                onChange={handleImageChange} 
+              />
             </div>
           </div>
 
-          {/* Debug Console */}
-          {debugLog.length > 0 && (
-              <div className="bg-gray-900 text-green-400 text-xs p-3 rounded font-mono h-32 overflow-y-auto">
-                  {debugLog.map((log, i) => (
-                      <div key={i}>{log}</div>
-                  ))}
-              </div>
+          {/* Progress Bar */}
+          {loading && (
+            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+               <div 
+                 className="bg-[#febd69] h-2.5 rounded-full transition-all duration-300" 
+                 style={{ width: `${Math.max(5, uploadProgress)}%` }}
+               ></div>
+               <p className="text-center text-xs text-gray-600 mt-1">{uploadStatus}</p>
+            </div>
           )}
 
           <div className="pt-4 border-t border-gray-100">
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] disabled:opacity-70"
+              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {loading ? status : 'List Item Now'}
+              {loading ? (
+                  <span className="flex items-center">
+                      <Loader2 className="animate-spin h-4 w-4 mr-2" /> Processing...
+                  </span>
+              ) : 'List Item Now'}
             </button>
           </div>
         </form>
