@@ -1,9 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { db, storage } from '../services/firebase';
+import { db } from '../services/firebase';
 import { UserProfile, COLLECTIONS } from '../types';
-import { CheckCircle, AlertCircle, User as UserIcon, Upload, Loader2, CreditCard } from 'lucide-react';
-import "firebase/compat/storage"; 
+import { AlertCircle, User as UserIcon, Loader2, CreditCard } from 'lucide-react';
 
 interface ProfileSetupProps {
   user: User;
@@ -20,13 +19,8 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
     agreedToTerms: false,
   });
   
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState('');
   const [error, setError] = useState('');
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -35,14 +29,6 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
 
   const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(prev => ({ ...prev, agreedToTerms: e.target.checked }));
-  };
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      setImagePreview(URL.createObjectURL(file));
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -61,33 +47,11 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
         setError('Student ID Number is required for verification.');
         return;
     }
-    if (!selectedFile) {
-        setError('Please upload a photo of your Student ID Card.');
-        return;
-    }
 
     setIsSubmitting(true);
-    setUploadStatus('Uploading ID Card...');
 
     try {
-      // 1. Upload ID Card Image
-      let idCardUrl = '';
-      if (selectedFile) {
-          const fileName = `${user.uid}_idcard.jpg`;
-          const storageRef = storage.ref().child(`verification/${fileName}`);
-          
-          // Simple upload without compression for ID cards (need clarity)
-          // relying on blob upload for stability
-          const snapshot = await storageRef.put(selectedFile, {
-            contentType: selectedFile.type || 'image/jpeg',
-            customMetadata: { uid: user.uid, type: 'id_card' }
-          });
-          
-          idCardUrl = await snapshot.ref.getDownloadURL();
-      }
-
-      // 2. Save Profile
-      setUploadStatus('Saving Profile...');
+      // Save Profile
       const newProfile: UserProfile = {
         uid: user.uid,
         displayName: user.displayName || 'Student',
@@ -97,7 +61,6 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
         address: formData.address,
         phoneNumber: formData.phoneNumber,
         studentId: formData.studentId,
-        idCardUrl: idCardUrl,
         roleIntent: formData.roleIntent as any,
         agreedToTerms: true,
         createdAt: Date.now(),
@@ -196,7 +159,7 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
                     <CreditCard className="h-4 w-4 mr-2" /> Identity Verification
                 </h3>
                 
-                <div className="mb-4">
+                <div>
                     <label className="block text-xs font-medium text-blue-800 mb-1">Student ID Number</label>
                     <input
                         name="studentId"
@@ -205,37 +168,8 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
                         value={formData.studentId}
                         onChange={handleChange}
                         className="block w-full border border-blue-200 rounded-md shadow-sm py-2 px-3 sm:text-sm focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g. NSEC/2024/..."
+                        placeholder="Student ID Number"
                     />
-                </div>
-
-                <div>
-                    <label className="block text-xs font-medium text-blue-800 mb-2">Upload ID Card Photo</label>
-                    <div 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-blue-300 border-dashed rounded-md bg-white hover:bg-blue-50 cursor-pointer"
-                    >
-                        {imagePreview ? (
-                            <div className="relative">
-                                <img src={imagePreview} alt="ID Preview" className="h-32 object-contain" />
-                                <p className="text-xs text-center mt-2 text-blue-600">Click to change</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-1 text-center">
-                                <Upload className="mx-auto h-8 w-8 text-blue-400" />
-                                <div className="text-xs text-blue-600">
-                                    <span>Upload a photo</span>
-                                </div>
-                            </div>
-                        )}
-                        <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            className="hidden" 
-                            accept="image/*"
-                            onChange={handleImageChange}
-                        />
-                    </div>
                 </div>
             </div>
 
@@ -278,9 +212,9 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
               >
                 {isSubmitting ? (
                     <span className="flex items-center">
-                        <Loader2 className="animate-spin h-4 w-4 mr-2" /> {uploadStatus}
+                        <Loader2 className="animate-spin h-4 w-4 mr-2" /> Setting up...
                     </span>
-                ) : 'Complete Verification & Setup'}
+                ) : 'Complete Setup'}
               </button>
             </div>
           </form>

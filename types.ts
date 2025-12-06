@@ -7,7 +7,7 @@ export interface UserProfile {
   address: string;
   phoneNumber: string; // WhatsApp number
   studentId: string; // New: Student ID Number
-  idCardUrl: string; // New: URL of uploaded ID card
+  idCardUrl?: string; // Optional now: URL of uploaded ID card
   roleIntent: 'buy' | 'sell' | 'both' | 'undecided';
   agreedToTerms: boolean;
   createdAt: number;
