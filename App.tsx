@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { User } from 'firebase/auth';
 import { auth, db } from './services/firebase';
 import { UserProfile, COLLECTIONS } from './types';
 import Login from './pages/Login';
@@ -9,6 +8,8 @@ import ProfileSetup from './pages/ProfileSetup';
 import Home from './pages/Home';
 import SellItem from './pages/SellItem';
 import ProductDetail from './pages/ProductDetail';
+import Orders from './pages/Orders';
+import Admin from './pages/Admin';
 import Legal from './pages/Legal';
 import Value from './pages/Value';
 import Navbar from './components/Navbar';
@@ -22,14 +23,14 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
         // Fetch user profile from Firestore to check if they completed setup
         try {
-          const docRef = doc(db, COLLECTIONS.USERS, currentUser.uid);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
+          const docRef = db.collection(COLLECTIONS.USERS).doc(currentUser.uid);
+          const docSnap = await docRef.get();
+          if (docSnap.exists) {
             setUserProfile(docSnap.data() as UserProfile);
           } else {
             setUserProfile(null);
@@ -104,6 +105,23 @@ const App: React.FC = () => {
               element={
                 <ProtectedRoute user={user} userProfile={userProfile}>
                   <SellItem user={user} profile={userProfile!} />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/orders"
+              element={
+                <ProtectedRoute user={user} userProfile={userProfile}>
+                  <Orders user={user} />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute user={user} userProfile={userProfile}>
+                   {/* In a real app, check userProfile.isAdmin here */}
+                  <Admin />
                 </ProtectedRoute>
               }
             />

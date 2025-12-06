@@ -1,5 +1,4 @@
 import React from 'react';
-import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../services/firebase';
 import { useNavigate } from 'react-router-dom';
 import { ShoppingCart } from 'lucide-react';
@@ -9,7 +8,7 @@ const Login: React.FC = () => {
 
   const handleGoogleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      await auth.signInWithPopup(googleProvider);
       // Auth state listener in App.tsx handles redirect
     } catch (error) {
       console.error("Login failed", error);

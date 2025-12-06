@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { Product, COLLECTIONS } from '../types';
 import { Link } from 'react-router-dom';
@@ -17,8 +16,8 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
     const fetchProducts = async () => {
       try {
         // Use a simple collection query and sort client-side to avoid "Missing Index" errors
-        const q = collection(db, COLLECTIONS.PRODUCTS);
-        const querySnapshot = await getDocs(q);
+        const q = db.collection(COLLECTIONS.PRODUCTS);
+        const querySnapshot = await q.get();
         const fetchedProducts: Product[] = [];
         querySnapshot.forEach((doc) => {
           fetchedProducts.push({ id: doc.id, ...doc.data() } as Product);

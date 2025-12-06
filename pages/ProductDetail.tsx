@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db } from '../services/firebase';
-import { Product, COLLECTIONS } from '../types';
+import { Product, COLLECTIONS, Order } from '../types';
 import { User } from 'firebase/auth';
-import { Loader2, MessageCircle, ArrowLeft, ShieldCheck, MapPin, Share2, Star, Lock } from 'lucide-react';
+import { Loader2, ShieldCheck, Share2, Star, Lock, CheckCircle } from 'lucide-react';
 
 interface ProductDetailProps {
   user: User | null;
@@ -12,16 +11,18 @@ interface ProductDetailProps {
 
 const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
+  const [ordering, setOrdering] = useState(false);
 
   useEffect(() => {
     const fetchProduct = async () => {
       if (!id) return;
       try {
-        const docRef = doc(db, COLLECTIONS.PRODUCTS, id);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
+        const docRef = db.collection(COLLECTIONS.PRODUCTS).doc(id);
+        const docSnap = await docRef.get();
+        if (docSnap.exists) {
           setProduct({ id: docSnap.id, ...docSnap.data() } as Product);
         }
       } catch (error) {
@@ -34,6 +35,36 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
     fetchProduct();
   }, [id]);
 
+  const handlePlaceOrder = async () => {
+    if (!user || !product) return;
+    
+    setOrdering(true);
+    try {
+        // Create Order
+        const newOrder: Omit<Order, 'id'> = {
+            productId: product.id,
+            productTitle: product.title,
+            productImage: product.imageUrl,
+            productPrice: product.price,
+            buyerId: user.uid,
+            buyerName: user.displayName || 'Student',
+            sellerId: product.sellerId,
+            sellerName: product.sellerName,
+            sellerWhatsapp: product.sellerWhatsapp,
+            status: 'pending',
+            createdAt: Date.now()
+        };
+
+        await db.collection(COLLECTIONS.ORDERS).add(newOrder);
+        navigate('/orders');
+    } catch (e) {
+        console.error("Order failed", e);
+        alert("Could not place order. Try again.");
+    } finally {
+        setOrdering(false);
+    }
+  };
+
   if (loading) return <div className="flex justify-center mt-20"><Loader2 className="animate-spin text-gray-800" /></div>;
   if (!product) return <div className="text-center mt-20">Product not found.</div>;
 
@@ -44,12 +75,6 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
   const discountPercentage = product.condition === 'used' && product.originalPrice
     ? Math.round((savings / product.originalPrice) * 100)
     : 0;
-
-  const whatsappMessage = encodeURIComponent(
-    `Hi ${product.sellerName}, I found your item "${product.title}" on NSEC Cart for ₹${product.price}. Is it still available?`
-  );
-  
-  const whatsappUrl = `https://wa.me/${product.sellerWhatsapp.replace(/\D/g,'')}?text=${whatsappMessage}`;
 
   return (
     <div className="bg-white min-h-screen">
@@ -91,16 +116,18 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
                   <Star className="h-4 w-4 fill-current" />
                   <Star className="h-4 w-4 text-gray-300" />
                </div>
-               <span className="text-sm text-blue-600 hover:underline cursor-pointer">12 ratings</span>
+               <span className="text-sm text-blue-600 hover:underline cursor-pointer">Unrated</span>
             </div>
 
             <div className="border-t border-b border-gray-100 py-3 my-3">
               <div className="flex items-baseline">
                 <span className="text-sm text-gray-500 mr-2">Price:</span>
-                <span className="text-2xl font-medium text-[#B12704]">₹{product.price}</span>
+                <span className="text-2xl font-medium text-[#B12704]">
+                    {product.isFree ? 'FREE' : `₹${product.price}`}
+                </span>
               </div>
               
-              {product.condition === 'used' && product.originalPrice && (
+              {!product.isFree && product.condition === 'used' && product.originalPrice && (
                 <div className="mt-1">
                   <span className="text-sm text-gray-500 mr-2">M.R.P.:</span>
                   <span className="text-sm text-gray-500 line-through">₹{product.originalPrice}</span>
@@ -109,7 +136,7 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
               )}
               
               <div className="mt-1 text-sm text-gray-600">
-                Inclusive of all taxes
+                Inclusive of all taxes. No online payment required.
               </div>
             </div>
 
@@ -127,25 +154,32 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
           {/* Right Column: Buy Box (3 cols) */}
           <div className="lg:col-span-3 mt-6 lg:mt-0">
              <div className="border border-gray-200 rounded-lg p-4 shadow-sm bg-white">
-                <div className="text-xl font-medium text-[#B12704] mb-2">₹{product.price}</div>
+                <div className="text-xl font-medium text-[#B12704] mb-2">
+                    {product.isFree ? 'FREE' : `₹${product.price}`}
+                </div>
                 
                 <div className="text-sm text-[#007600] font-medium mb-4">
-                  In stock.
+                  Available in College Campus.
                 </div>
                 
                 <div className="text-sm text-gray-600 mb-4">
-                   Sold by <span className="text-blue-600">{product.sellerName}</span> and Fulfilled locally on campus.
+                   Sold by <span className="text-blue-600">{product.sellerName}</span>.
                 </div>
 
                 {user ? (
-                   <a
-                    href={whatsappUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full block text-center bg-[#FFD814] hover:bg-[#F7CA00] border border-[#FCD200] rounded-full py-2 text-sm font-medium shadow-sm mb-3"
-                  >
-                    Buy Now (WhatsApp)
-                  </a>
+                   user.uid === product.sellerId ? (
+                       <button className="w-full block text-center bg-gray-200 border border-gray-300 rounded-full py-2 text-sm font-medium shadow-sm mb-3 cursor-not-allowed">
+                           This is your item
+                       </button>
+                   ) : (
+                    <button
+                        onClick={handlePlaceOrder}
+                        disabled={ordering}
+                        className="w-full block text-center bg-[#FFD814] hover:bg-[#F7CA00] border border-[#FCD200] rounded-full py-2 text-sm font-medium shadow-sm mb-3"
+                    >
+                        {ordering ? 'Processing...' : 'Place Order'}
+                    </button>
+                   )
                 ) : (
                   <Link
                     to="/login"
@@ -155,24 +189,14 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
                   </Link>
                 )}
 
-                <button className="w-full block text-center bg-[#FFA41C] hover:bg-[#FA8900] border border-[#FF8F00] rounded-full py-2 text-sm font-medium shadow-sm mb-4">
-                  Make an Offer
-                </button>
-
                 <div className="flex items-start text-xs text-gray-500 mt-4">
                    <Lock className="h-3 w-3 mr-1 mt-0.5" />
                    <span>Secure transaction. Payment happens offline directly between students.</span>
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-gray-200">
-                   <div className="flex items-center justify-between mb-2">
-                     <span className="text-xs text-gray-500">Seller Contact</span>
-                     <span className="text-xs text-blue-600">
-                        {user ? `+91 ${product.sellerWhatsapp.slice(0,2)}*****` : 'Login to view'}
-                     </span>
-                   </div>
                    <div className="flex items-center text-xs text-green-700">
-                      <ShieldCheck className="h-3 w-3 mr-1" /> Verified Student
+                      <ShieldCheck className="h-3 w-3 mr-1" /> Verified Student Listing
                    </div>
                 </div>
              </div>

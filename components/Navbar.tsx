@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { User } from 'firebase/auth';
 import { UserProfile } from '../types';
 import { auth } from '../services/firebase';
-import { LogOut, Plus, Search, ShoppingCart, MapPin, Menu, User as UserIcon, School } from 'lucide-react';
+import { LogOut, Plus, Search, ShoppingCart, MapPin, Menu, Package, ShieldCheck, School } from 'lucide-react';
 
 interface NavbarProps {
   user: User | null;
@@ -106,8 +106,14 @@ const Navbar: React.FC<NavbarProps> = ({ user, profile, searchValue, onSearch })
                   <div className="px-4 py-2 border-b">
                     <p className="text-gray-800 font-bold text-sm">Your Account</p>
                   </div>
+                  <Link to="/orders" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center">
+                    <Package className="h-4 w-4 mr-2" /> My Orders
+                  </Link>
                   <Link to="/sell" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Your Listings</Link>
                   <Link to="/setup-profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Edit Profile</Link>
+                  <Link to="/admin" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center">
+                    <ShieldCheck className="h-4 w-4 mr-2" /> Admin Panel
+                  </Link>
                   <button 
                     onClick={handleLogout}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center"
@@ -129,12 +135,11 @@ const Navbar: React.FC<NavbarProps> = ({ user, profile, searchValue, onSearch })
             </div>
           </div>
 
-          {/* "Cart" Placeholder */}
-          <div className="flex items-end cursor-pointer hover:border hover:border-white p-2 rounded relative">
-             <ShoppingCart className="h-8 w-8" />
-             <span className="font-bold text-sm leading-none mb-1 hidden md:block">Cart</span>
-             <span className="absolute top-1 right-2 md:right-8 bg-[#febd69] text-black text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">0</span>
-          </div>
+          {/* Orders Link */}
+          <Link to="/orders" className="flex items-end cursor-pointer hover:border hover:border-white p-2 rounded relative">
+             <Package className="h-8 w-8" />
+             <span className="font-bold text-sm leading-none mb-1 hidden md:block">Orders</span>
+          </Link>
         </div>
       </nav>
 
