@@ -6,6 +6,7 @@ import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, AlertCircle } from 'lucide-react';
+import "firebase/compat/storage"; // Force import storage side-effects
 
 interface SellItemProps {
   user: User;
@@ -47,13 +48,18 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      // Basic validation
-      if (file.size > 10 * 1024 * 1024) {
-        alert("File is too large (Max 10MB)");
+      // Limit file size to 8MB to prevent crashes
+      if (file.size > 8 * 1024 * 1024) {
+        alert("Image is too large. Please choose an image under 8MB.");
         return;
       }
       setImageFile(file);
-      setImagePreview(URL.createObjectURL(file));
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -68,75 +74,17 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       setFormData(prev => ({ ...prev, description: desc }));
     } catch (error) {
       console.error("AI Error", error);
+      alert("Could not generate description. Please write one manually.");
     } finally {
       setGeneratingDesc(false);
     }
-  };
-
-  // Robust image compressor
-  const processImage = async (file: File): Promise<Blob> => {
-    // If file is small (< 1MB), don't compress
-    if (file.size < 1024 * 1024) {
-      return file;
-    }
-
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      
-      // Fallback if reader fails
-      reader.onerror = () => resolve(file);
-
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        
-        img.onerror = () => resolve(file);
-
-        img.onload = () => {
-          try {
-            const canvas = document.createElement('canvas');
-            const MAX_WIDTH = 1000;
-            let width = img.width;
-            let height = img.height;
-
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            
-            if (!ctx) {
-              resolve(file);
-              return;
-            }
-
-            ctx.drawImage(img, 0, 0, width, height);
-            
-            canvas.toBlob((blob) => {
-              if (blob) {
-                resolve(blob);
-              } else {
-                resolve(file);
-              }
-            }, 'image/jpeg', 0.8);
-          } catch (e) {
-            console.warn("Compression error, using original", e);
-            resolve(file);
-          }
-        };
-      };
-    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Validation
-    if (!imageFile) {
+    if (!imageFile || !imagePreview) {
       alert("Please upload an image of the item.");
       return;
     }
@@ -150,35 +98,26 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     setLoading(true);
+    setUploadStatus('Initializing...');
     
     try {
-      // 1. Process Image
-      setUploadStatus('Processing image...');
-      let fileToUpload: Blob;
-      
-      try {
-        fileToUpload = await processImage(imageFile);
-      } catch (err) {
-        console.warn("Processing failed, using original", err);
-        fileToUpload = imageFile;
-      }
-
-      // 2. Upload to Firebase Storage
+      // 1. Upload to Firebase Storage using Data URL (String) for max compatibility
       setUploadStatus('Uploading image...');
-      const fileName = `products/${user.uid}/${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+      const fileName = `products/${user.uid}/${Date.now()}_${Math.floor(Math.random() * 1000)}`;
       const storageRef = storage.ref(fileName);
       
       let imageUrl = '';
       try {
-        const snapshot = await storageRef.put(fileToUpload);
+        // Use putString with 'data_url' format which is robust
+        const snapshot = await storageRef.putString(imagePreview, 'data_url');
         imageUrl = await snapshot.ref.getDownloadURL();
       } catch (uploadError: any) {
         console.error("Upload failed:", uploadError);
-        throw new Error(`Image upload failed. Please try a different image. (${uploadError.code || 'Unknown'})`);
+        throw new Error(`Image Upload Failed: ${uploadError.message || uploadError.code}`);
       }
 
-      // 3. Save to Firestore
-      setUploadStatus('Saving listing...');
+      // 2. Save to Firestore
+      setUploadStatus('Saving details...');
       
       const price = formData.isFree ? 0 : Number(formData.price);
       const originalPrice = formData.condition === 'used' && formData.originalPrice 
@@ -201,14 +140,16 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       });
 
       setUploadStatus('Success!');
-      navigate('/');
+      // Short delay to show success state
+      setTimeout(() => {
+        navigate('/');
+      }, 500);
       
     } catch (error: any) {
       console.error("Error listing item:", error);
-      alert(`Error: ${error.message}.`);
+      alert(`Error: ${error.message}. Please try again.`);
     } finally {
       setLoading(false);
-      setUploadStatus('');
     }
   };
 
@@ -454,7 +395,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG up to 10MB</p>
+                  <p className="text-xs text-gray-500">PNG, JPG up to 8MB</p>
                 </div>
               )}
             </div>

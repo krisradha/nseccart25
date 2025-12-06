@@ -1,3 +1,4 @@
+
 import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
@@ -13,7 +14,8 @@ const firebaseConfig = {
   measurementId: "G-2L2VV1JQLF"
 };
 
-const app = firebase.initializeApp(firebaseConfig);
+// Initialize only if not already initialized
+const app = !firebase.apps.length ? firebase.initializeApp(firebaseConfig) : firebase.app();
 
 export const auth = app.auth();
 export const googleProvider = new firebase.auth.GoogleAuthProvider();
