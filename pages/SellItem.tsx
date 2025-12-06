@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import * as firestore from 'firebase/firestore';
-import * as storageFuncs from 'firebase/storage';
+import { addDoc, collection } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
@@ -70,20 +70,26 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
     try {
       // 1. Upload Image
-      const storageRef = storageFuncs.ref(storage, `products/${user.uid}/${Date.now()}_${imageFile.name}`);
-      await storageFuncs.uploadBytes(storageRef, imageFile);
-      const imageUrl = await storageFuncs.getDownloadURL(storageRef);
+      const storageRef = ref(storage, `products/${user.uid}/${Date.now()}_${imageFile.name}`);
+      await uploadBytes(storageRef, imageFile);
+      const imageUrl = await getDownloadURL(storageRef);
 
-      // 2. Prepare Data
-      const price = parseFloat(formData.price);
+      // 2. Prepare Data - Ensure numbers are actually numbers
+      const price = Number(formData.price);
       const originalPrice = formData.condition === 'used' && formData.originalPrice 
-        ? parseFloat(formData.originalPrice) 
+        ? Number(formData.originalPrice) 
         : undefined;
 
+      if (isNaN(price)) {
+         alert("Please enter a valid price");
+         setLoading(false);
+         return;
+      }
+
       // 3. Save to Firestore
-      await firestore.addDoc(firestore.collection(db, COLLECTIONS.PRODUCTS), {
+      await addDoc(collection(db, COLLECTIONS.PRODUCTS), {
         sellerId: user.uid,
-        sellerName: profile.displayName,
+        sellerName: profile.displayName || 'Unknown Seller',
         sellerWhatsapp: profile.phoneNumber,
         title: formData.title,
         description: formData.description,
@@ -105,7 +111,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   };
 
   const savings = (formData.condition === 'used' && formData.originalPrice && formData.price)
-    ? parseFloat(formData.originalPrice) - parseFloat(formData.price)
+    ? Number(formData.originalPrice) - Number(formData.price)
     : 0;
 
   return (
@@ -119,7 +125,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           Sell your item
         </h2>
 
-        <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 sm:p-8 rounded-lg shadow-md">
+        <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 sm:p-8 rounded-lg shadow-md border border-gray-200">
           
           {/* Title */}
           <div>
@@ -156,6 +162,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 <option>Books</option>
                 <option>Electronics</option>
                 <option>Stationery</option>
+                <option>Lab Coats</option>
                 <option>Hostel Needs</option>
                 <option>Sports</option>
                 <option>Fashion</option>
@@ -194,6 +201,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       name="originalPrice"
                       id="originalPrice"
                       required
+                      min="0"
                       value={formData.originalPrice}
                       onChange={handleChange}
                       className="mt-1 block w-full shadow-sm focus:ring-[#febd69] focus:border-[#febd69] sm:text-sm border-gray-300 rounded-md border p-2"
@@ -209,6 +217,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       name="price"
                       id="price"
                       required
+                      min="0"
                       value={formData.price}
                       onChange={handleChange}
                       className="mt-1 block w-full shadow-sm focus:ring-[#febd69] focus:border-[#febd69] sm:text-sm border-gray-300 rounded-md border p-2"
@@ -232,6 +241,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                     name="price"
                     id="price"
                     required
+                    min="0"
                     value={formData.price}
                     onChange={handleChange}
                     className="mt-1 block w-full shadow-sm focus:ring-[#febd69] focus:border-[#febd69] sm:text-sm border-gray-300 rounded-md border p-2"
@@ -254,7 +264,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 className="inline-flex items-center px-3 py-1 border border-purple-200 text-xs font-medium rounded-full text-purple-700 bg-purple-50 hover:bg-purple-100 focus:outline-none"
               >
                 {generatingDesc ? <Loader2 className="animate-spin h-3 w-3 mr-1"/> : <Sparkles className="h-3 w-3 mr-1" />}
-                Use AI Magic
+                Auto-Generate (AI)
               </button>
             </div>
             <textarea

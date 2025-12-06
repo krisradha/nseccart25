@@ -1,11 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import * as firestore from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { Product, COLLECTIONS } from '../types';
+import { User } from 'firebase/auth';
 import { Loader2, MessageCircle, ArrowLeft, ShieldCheck, MapPin, Share2, Star, Lock } from 'lucide-react';
 
-const ProductDetail: React.FC = () => {
+interface ProductDetailProps {
+  user: User | null;
+}
+
+const ProductDetail: React.FC<ProductDetailProps> = ({ user }) => {
   const { id } = useParams<{ id: string }>();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
@@ -14,8 +19,8 @@ const ProductDetail: React.FC = () => {
     const fetchProduct = async () => {
       if (!id) return;
       try {
-        const docRef = firestore.doc(db, COLLECTIONS.PRODUCTS, id);
-        const docSnap = await firestore.getDoc(docRef);
+        const docRef = doc(db, COLLECTIONS.PRODUCTS, id);
+        const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           setProduct({ id: docSnap.id, ...docSnap.data() } as Product);
         }
@@ -41,7 +46,7 @@ const ProductDetail: React.FC = () => {
     : 0;
 
   const whatsappMessage = encodeURIComponent(
-    `Hi ${product.sellerName}, I found your item "${product.title}" on NSE Cart for ₹${product.price}. Is it still available?`
+    `Hi ${product.sellerName}, I found your item "${product.title}" on NSEC Cart for ₹${product.price}. Is it still available?`
   );
   
   const whatsappUrl = `https://wa.me/${product.sellerWhatsapp.replace(/\D/g,'')}?text=${whatsappMessage}`;
@@ -132,14 +137,23 @@ const ProductDetail: React.FC = () => {
                    Sold by <span className="text-blue-600">{product.sellerName}</span> and Fulfilled locally on campus.
                 </div>
 
-                <a
-                  href={whatsappUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full block text-center bg-[#FFD814] hover:bg-[#F7CA00] border border-[#FCD200] rounded-full py-2 text-sm font-medium shadow-sm mb-3"
-                >
-                  Buy Now (WhatsApp)
-                </a>
+                {user ? (
+                   <a
+                    href={whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full block text-center bg-[#FFD814] hover:bg-[#F7CA00] border border-[#FCD200] rounded-full py-2 text-sm font-medium shadow-sm mb-3"
+                  >
+                    Buy Now (WhatsApp)
+                  </a>
+                ) : (
+                  <Link
+                    to="/login"
+                    className="w-full block text-center bg-[#FFD814] hover:bg-[#F7CA00] border border-[#FCD200] rounded-full py-2 text-sm font-medium shadow-sm mb-3"
+                  >
+                    Login to Buy
+                  </Link>
+                )}
 
                 <button className="w-full block text-center bg-[#FFA41C] hover:bg-[#FA8900] border border-[#FF8F00] rounded-full py-2 text-sm font-medium shadow-sm mb-4">
                   Make an Offer
@@ -153,7 +167,9 @@ const ProductDetail: React.FC = () => {
                 <div className="mt-4 pt-4 border-t border-gray-200">
                    <div className="flex items-center justify-between mb-2">
                      <span className="text-xs text-gray-500">Seller Contact</span>
-                     <span className="text-xs text-blue-600">+91 {product.sellerWhatsapp.slice(0,2)}*****</span>
+                     <span className="text-xs text-blue-600">
+                        {user ? `+91 ${product.sellerWhatsapp.slice(0,2)}*****` : 'Login to view'}
+                     </span>
                    </div>
                    <div className="flex items-center text-xs text-green-700">
                       <ShieldCheck className="h-3 w-3 mr-1" /> Verified Student
