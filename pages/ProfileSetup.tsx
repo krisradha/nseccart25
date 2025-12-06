@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore/lite';
 import { db } from '../services/firebase';
 import { UserProfile, COLLECTIONS } from '../types';
 import { CheckCircle, AlertCircle, User as UserIcon } from 'lucide-react';

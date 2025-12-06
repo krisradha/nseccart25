@@ -1,21 +1,62 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { addDoc, collection } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { addDoc, collection } from 'firebase/firestore/lite';
+import { ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft } from 'lucide-react';
+import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, AlertCircle } from 'lucide-react';
 
 interface SellItemProps {
   user: User;
   profile: UserProfile;
 }
 
+// Helper to compress image
+const compressImage = (file: File): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        // Max width 800px is sufficient for web view and drastically reduces size
+        const MAX_WIDTH = 800; 
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_WIDTH) {
+          height *= MAX_WIDTH / width;
+          width = MAX_WIDTH;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          // Compress to JPEG at 70% quality
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Image compression failed'));
+          }, 'image/jpeg', 0.7);
+        } else {
+          reject(new Error('Could not get canvas context'));
+        }
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
 const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState(''); // 'Compressing', 'Uploading', 'Saving'
   const [generatingDesc, setGeneratingDesc] = useState(false);
   
   const [formData, setFormData] = useState({
@@ -67,26 +108,32 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     setLoading(true);
+    setUploadStatus('Preparing image...');
 
     try {
-      // 1. Upload Image
-      const storageRef = ref(storage, `products/${user.uid}/${Date.now()}_${imageFile.name}`);
-      await uploadBytes(storageRef, imageFile);
+      // 1. Compress Image
+      setUploadStatus('Optimizing image size...');
+      const compressedImageBlob = await compressImage(imageFile);
+
+      // 2. Upload Image
+      setUploadStatus('Uploading to cloud...');
+      // Create a reference with a smaller file extension hint
+      const storageRef = ref(storage, `products/${user.uid}/${Date.now()}_compressed.jpg`);
+      await uploadBytes(storageRef, compressedImageBlob);
       const imageUrl = await getDownloadURL(storageRef);
 
-      // 2. Prepare Data - Ensure numbers are actually numbers
+      // 3. Prepare Data
+      setUploadStatus('Finalizing listing...');
       const price = Number(formData.price);
       const originalPrice = formData.condition === 'used' && formData.originalPrice 
         ? Number(formData.originalPrice) 
         : undefined;
 
       if (isNaN(price)) {
-         alert("Please enter a valid price");
-         setLoading(false);
-         return;
+         throw new Error("Invalid price entered");
       }
 
-      // 3. Save to Firestore
+      // 4. Save to Firestore
       await addDoc(collection(db, COLLECTIONS.PRODUCTS), {
         sellerId: user.uid,
         sellerName: profile.displayName || 'Unknown Seller',
@@ -101,13 +148,13 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         createdAt: Date.now(),
       });
 
+      // Success!
       navigate('/');
     } catch (error) {
       console.error("Error listing item:", error);
-      alert("Failed to list item. Please try again.");
-    } finally {
+      alert("Failed to list item. Please try again. If the issue persists, try a different photo.");
       setLoading(false);
-    }
+    } 
   };
 
   const savings = (formData.condition === 'used' && formData.originalPrice && formData.price)
@@ -308,19 +355,27 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
+                  <p className="text-xs text-gray-500">PNG, JPG up to 5MB (Auto-compressed)</p>
                 </div>
               )}
             </div>
           </div>
 
+          {/* Feedback & Actions */}
           <div className="pt-4 border-t border-gray-100">
+            {loading && (
+              <div className="mb-4 flex items-center justify-center text-sm text-blue-600 bg-blue-50 p-2 rounded">
+                <Loader2 className="animate-spin h-4 w-4 mr-2" />
+                <span>{uploadStatus}</span>
+              </div>
+            )}
+            
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#f7ca00]"
+              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#f7ca00] disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {loading ? 'Publishing...' : 'List Item Now'}
+              {loading ? 'Please Wait...' : 'List Item Now'}
             </button>
           </div>
         </form>
