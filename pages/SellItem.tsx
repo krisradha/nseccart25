@@ -30,7 +30,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     whatsappNumber: profile?.phoneNumber || ''
   });
   
-  // We only store the base64 string now, since we resize it immediately
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -45,7 +44,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
-  // --- ROBUST IMAGE RESIZER ---
+  // --- AGGRESSIVE IMAGE RESIZER ---
   const resizeImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -55,8 +54,9 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800;
-          const MAX_HEIGHT = 800;
+          // Reduced to 600px for guaranteed upload success on slow networks
+          const MAX_WIDTH = 600;
+          const MAX_HEIGHT = 600;
           let width = img.width;
           let height = img.height;
 
@@ -78,8 +78,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
           
-          // Compress to JPEG 0.7 quality
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          // Compress to JPEG 0.6 quality (Very small file size)
+          resolve(canvas.toDataURL('image/jpeg', 0.6));
         };
         img.onerror = (err) => reject(err);
       };
@@ -91,7 +91,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       
-      // Simple validation
       if (!file.type.startsWith('image/')) {
         alert("Please upload an image file.");
         return;
@@ -101,11 +100,16 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       try {
         const resizedBase64 = await resizeImage(file);
         setImagePreview(resizedBase64);
-        setUploadStatus(''); // Clear status after resize
+        setUploadStatus(''); 
       } catch (err) {
         console.error("Resize failed", err);
-        alert("Could not process image. Try a different one.");
-        setUploadStatus('');
+        // Fallback to original file if resize fails (read as base64)
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (ev) => {
+            setImagePreview(ev.target?.result as string);
+            setUploadStatus('Warning: Using original large image.');
+        };
       }
     }
   };
@@ -147,19 +151,44 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     setLoading(true);
     
     try {
-      // 1. Upload to Firebase Storage using the Resized Base64 String
-      setUploadStatus('Uploading image...');
+      // 1. Upload to Firebase Storage
+      setUploadStatus('Uploading image (0%)...');
       const fileName = `products/${user.uid}/${Date.now()}_img.jpg`;
       const storageRef = storage.ref(fileName);
       
       let imageUrl = '';
-      try {
-        const snapshot = await storageRef.putString(imagePreview, 'data_url');
-        imageUrl = await snapshot.ref.getDownloadURL();
-      } catch (uploadError: any) {
-        console.error("Upload failed:", uploadError);
-        throw new Error(`Image Upload Failed: ${uploadError.message || uploadError.code}`);
-      }
+
+      // Create Upload Task
+      const uploadTask = storageRef.putString(imagePreview, 'data_url');
+
+      // Wrap in a promise to handle timeout and progress
+      await new Promise<void>((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+              uploadTask.cancel();
+              reject(new Error("Upload timed out (15s). Internet too slow."));
+          }, 15000);
+
+          uploadTask.on(
+              'state_changed',
+              (snapshot) => {
+                  const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                  setUploadStatus(`Uploading image (${Math.round(progress)}%)...`);
+              },
+              (error) => {
+                  clearTimeout(timeoutId);
+                  reject(error);
+              },
+              async () => {
+                  clearTimeout(timeoutId);
+                  try {
+                    imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
+                    resolve();
+                  } catch (err) {
+                    reject(err);
+                  }
+              }
+          );
+      });
 
       // 2. Save to Firestore
       setUploadStatus('Saving details...');
@@ -191,7 +220,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       
     } catch (error: any) {
       console.error("Error listing item:", error);
-      alert(`Error: ${error.message}. Please try again.`);
+      alert(`Error: ${error.message || "Something went wrong"}. Try again.`);
+      setUploadStatus('Failed.');
     } finally {
       setLoading(false);
     }
@@ -444,7 +474,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
               )}
             </div>
             {uploadStatus && (
-                <p className="text-xs text-center text-blue-600 mt-2 animate-pulse">{uploadStatus}</p>
+                <p className="text-xs text-center text-blue-600 mt-2 font-mono">{uploadStatus}</p>
             )}
           </div>
 
@@ -453,7 +483,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             {loading && (
               <div className="mb-4 flex items-center justify-center text-sm text-blue-600 bg-blue-50 p-2 rounded animate-pulse">
                 <Loader2 className="animate-spin h-4 w-4 mr-2" />
-                <span>{uploadStatus}</span>
+                <span>Processing... {uploadStatus}</span>
               </div>
             )}
             
@@ -462,7 +492,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
               disabled={loading}
               className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#f7ca00] disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {loading ? 'Processing...' : 'List Item Now'}
+              {loading ? 'Please Wait...' : 'List Item Now'}
             </button>
           </div>
         </form>
