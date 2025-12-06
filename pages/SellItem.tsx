@@ -6,7 +6,7 @@ import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, AlertCircle } from 'lucide-react';
-import "firebase/compat/storage"; // Force import storage side-effects
+import "firebase/compat/storage"; 
 
 interface SellItemProps {
   user: User;
@@ -30,7 +30,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     whatsappNumber: profile?.phoneNumber || ''
   });
   
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  // We only store the base64 string now, since we resize it immediately
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -45,21 +45,68 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // --- ROBUST IMAGE RESIZER ---
+  const resizeImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 800;
+          let width = img.width;
+          let height = img.height;
+
+          // Calculate new dimensions
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          // Compress to JPEG 0.7 quality
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.onerror = (err) => reject(err);
+      };
+      reader.onerror = (err) => reject(err);
+    });
+  };
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      // Limit file size to 8MB to prevent crashes
-      if (file.size > 8 * 1024 * 1024) {
-        alert("Image is too large. Please choose an image under 8MB.");
+      
+      // Simple validation
+      if (!file.type.startsWith('image/')) {
+        alert("Please upload an image file.");
         return;
       }
-      setImageFile(file);
-      // Create preview
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+
+      setUploadStatus('Processing image...');
+      try {
+        const resizedBase64 = await resizeImage(file);
+        setImagePreview(resizedBase64);
+        setUploadStatus(''); // Clear status after resize
+      } catch (err) {
+        console.error("Resize failed", err);
+        alert("Could not process image. Try a different one.");
+        setUploadStatus('');
+      }
     }
   };
 
@@ -84,7 +131,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     e.preventDefault();
     
     // Validation
-    if (!imageFile || !imagePreview) {
+    if (!imagePreview) {
       alert("Please upload an image of the item.");
       return;
     }
@@ -98,17 +145,15 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     setLoading(true);
-    setUploadStatus('Initializing...');
     
     try {
-      // 1. Upload to Firebase Storage using Data URL (String) for max compatibility
+      // 1. Upload to Firebase Storage using the Resized Base64 String
       setUploadStatus('Uploading image...');
-      const fileName = `products/${user.uid}/${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const fileName = `products/${user.uid}/${Date.now()}_img.jpg`;
       const storageRef = storage.ref(fileName);
       
       let imageUrl = '';
       try {
-        // Use putString with 'data_url' format which is robust
         const snapshot = await storageRef.putString(imagePreview, 'data_url');
         imageUrl = await snapshot.ref.getDownloadURL();
       } catch (uploadError: any) {
@@ -140,7 +185,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       });
 
       setUploadStatus('Success!');
-      // Short delay to show success state
       setTimeout(() => {
         navigate('/');
       }, 500);
@@ -375,7 +419,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                    <img src={imagePreview} alt="Preview" className="h-48 object-contain rounded-md" />
                    <button 
                      type="button" 
-                     onClick={() => { setImageFile(null); setImagePreview(null); }}
+                     onClick={() => { setImagePreview(null); }}
                      className="absolute -top-2 -right-2 bg-white text-gray-500 border border-gray-200 rounded-full p-1 hover:text-red-500 shadow-sm"
                    >
                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -395,10 +439,13 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG up to 8MB</p>
+                  <p className="text-xs text-gray-500">JPG, PNG (Auto-resized)</p>
                 </div>
               )}
             </div>
+            {uploadStatus && (
+                <p className="text-xs text-center text-blue-600 mt-2 animate-pulse">{uploadStatus}</p>
+            )}
           </div>
 
           {/* Feedback & Actions */}

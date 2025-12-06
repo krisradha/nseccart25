@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { db, auth } from '../services/firebase';
 import { COLLECTIONS, Product, UserProfile } from '../types';
-import { Trash2, Shield, Users, ShoppingBag, Lock, Key, Loader2, LogOut } from 'lucide-react';
+import { Trash2, Shield, Users, ShoppingBag, Lock, Key, Loader2, LogOut, AlertCircle } from 'lucide-react';
 
 // Admin Credentials Configuration
+// Note: We will allow access via Password even if email doesn't match, 
+// but we show a warning if it's not the primary admin email.
 const ADMIN_EMAIL = "talkwithpritamdas@gmail.com";
 const ADMIN_PASS = "RAYGTFcHareKrishan jyTDCf25DHE";
 
@@ -22,11 +24,13 @@ const Admin: React.FC = () => {
 
   const handleLogin = (e: React.FormEvent) => {
       e.preventDefault();
-      if (passwordInput === ADMIN_PASS) {
+      // Check strict password
+      if (passwordInput.trim() === ADMIN_PASS) {
           setIsAuthorized(true);
+          setAuthError('');
           fetchData();
       } else {
-          setAuthError('Incorrect Admin Password');
+          setAuthError('Access Denied: Invalid Security Code');
       }
   };
 
@@ -63,26 +67,19 @@ const Admin: React.FC = () => {
       }
   };
 
-  // 1. Access Denied (Wrong Email)
-  if (currentUser?.email !== ADMIN_EMAIL) {
+  // If user is not logged in at all
+  if (!currentUser) {
       return (
-          <div className="min-h-screen flex items-center justify-center bg-gray-100 flex-col p-4">
-              <div className="bg-white p-8 rounded-lg shadow-sm text-center max-w-md w-full border border-gray-200">
-                <div className="mx-auto bg-red-50 p-4 rounded-full w-fit mb-4">
-                     <Shield className="h-10 w-10 text-red-500" />
-                </div>
-                <h1 className="text-xl font-bold text-gray-900 mb-2">Access Restricted</h1>
-                <p className="text-gray-500 mb-6 text-sm">This dashboard is strictly accessible only to the site administrator.</p>
-                <div className="bg-gray-50 p-3 rounded text-xs text-left border border-gray-100">
-                    <p className="font-bold text-gray-700">Current Session:</p>
-                    <p className="text-gray-600 truncate">{currentUser?.email || 'Guest User'}</p>
-                </div>
+          <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+              <div className="bg-white p-6 rounded shadow text-center">
+                  <p className="text-red-600 font-bold">Please Log In First</p>
+                  <p className="text-sm text-gray-500 mt-2">You need to be signed in to access the admin panel.</p>
               </div>
           </div>
       );
   }
 
-  // 2. Password Prompt (Correct Email, Not yet entered password)
+  // Password Prompt (Always show this first unless authorized)
   if (!isAuthorized) {
       return (
           <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -95,6 +92,16 @@ const Admin: React.FC = () => {
                   <h2 className="text-center text-2xl font-bold mb-2 text-gray-900">Admin Login</h2>
                   <p className="text-center text-xs text-gray-500 mb-6">Secure Gateway for NSEC Cart Management</p>
                   
+                  {currentUser.email !== ADMIN_EMAIL && (
+                      <div className="bg-yellow-50 border border-yellow-200 p-2 rounded mb-4 flex items-start gap-2">
+                          <AlertCircle className="h-4 w-4 text-yellow-600 mt-0.5" />
+                          <p className="text-xs text-yellow-700">
+                              You are logged in as <strong>{currentUser.email}</strong>. 
+                              This is not the primary admin email, but you may proceed if you have the code.
+                          </p>
+                      </div>
+                  )}
+
                   <form onSubmit={handleLogin}>
                       <div className="mb-4">
                           <label className="block text-xs font-bold text-gray-700 uppercase mb-2 tracking-wide">Security Code</label>
@@ -105,7 +112,7 @@ const Admin: React.FC = () => {
                                 value={passwordInput}
                                 onChange={(e) => setPasswordInput(e.target.value)}
                                 className="pl-10 w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
-                                placeholder="Enter admin password"
+                                placeholder="Enter admin pass phrase"
                                 autoFocus
                             />
                           </div>
@@ -124,7 +131,7 @@ const Admin: React.FC = () => {
       );
   }
 
-  // 3. Dashboard (Authorized)
+  // Dashboard (Authorized)
   return (
     <div className="min-h-screen bg-gray-100 p-4 sm:p-6">
         <div className="max-w-6xl mx-auto">
