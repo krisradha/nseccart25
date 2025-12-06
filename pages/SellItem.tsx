@@ -1,82 +1,16 @@
+
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone } from 'lucide-react';
+import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, AlertCircle } from 'lucide-react';
 
 interface SellItemProps {
   user: User;
   profile: UserProfile;
 }
-
-// Robust helper to compress image with timeout fallback
-const compressImage = (file: File): Promise<Blob> => {
-  return new Promise((resolve) => {
-    // Set a timeout to return original file if compression hangs/takes too long
-    const timeOutId = setTimeout(() => {
-      console.warn("Image compression timed out. Using original file.");
-      resolve(file);
-    }, 2500); // 2.5 seconds timeout
-
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target?.result as string;
-      
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1000; 
-          let width = img.width;
-          let height = img.height;
-
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            canvas.toBlob((blob) => {
-              clearTimeout(timeOutId);
-              if (blob) {
-                 resolve(blob);
-              } else {
-                 console.warn("Canvas toBlob failed. Using original.");
-                 resolve(file);
-              }
-            }, 'image/jpeg', 0.8);
-          } else {
-            clearTimeout(timeOutId);
-            resolve(file);
-          }
-        } catch (e) {
-          clearTimeout(timeOutId);
-          console.warn("Compression error:", e);
-          resolve(file);
-        }
-      };
-      
-      img.onerror = () => {
-        clearTimeout(timeOutId);
-        resolve(file);
-      };
-    };
-    
-    reader.onerror = () => {
-      clearTimeout(timeOutId);
-      resolve(file);
-    };
-  });
-};
 
 const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const navigate = useNavigate();
@@ -113,6 +47,11 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      // Basic validation
+      if (file.size > 10 * 1024 * 1024) {
+        alert("File is too large (Max 10MB)");
+        return;
+      }
       setImageFile(file);
       setImagePreview(URL.createObjectURL(file));
     }
@@ -134,6 +73,65 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
+  // Robust image compressor
+  const processImage = async (file: File): Promise<Blob> => {
+    // If file is small (< 1MB), don't compress
+    if (file.size < 1024 * 1024) {
+      return file;
+    }
+
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      
+      // Fallback if reader fails
+      reader.onerror = () => resolve(file);
+
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        
+        img.onerror = () => resolve(file);
+
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 1000;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            
+            if (!ctx) {
+              resolve(file);
+              return;
+            }
+
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            canvas.toBlob((blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                resolve(file);
+              }
+            }, 'image/jpeg', 0.8);
+          } catch (e) {
+            console.warn("Compression error, using original", e);
+            resolve(file);
+          }
+        };
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -150,41 +148,37 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       alert("Please provide a valid WhatsApp number (10 digits).");
       return;
     }
-    if (!formData.isFree && (!formData.price || Number(formData.price) < 0)) {
-        alert("Please enter a valid price.");
-        return;
-    }
     
     setLoading(true);
     
     try {
-      // 1. Compress Image
+      // 1. Process Image
       setUploadStatus('Processing image...');
       let fileToUpload: Blob;
+      
       try {
-        fileToUpload = await compressImage(imageFile);
+        fileToUpload = await processImage(imageFile);
       } catch (err) {
-        console.warn("Compression system failed, falling back", err);
+        console.warn("Processing failed, using original", err);
         fileToUpload = imageFile;
       }
 
-      // 2. Upload Image
-      setUploadStatus('Uploading image to cloud...');
-      // Safe filename with timestamp
+      // 2. Upload to Firebase Storage
+      setUploadStatus('Uploading image...');
       const fileName = `products/${user.uid}/${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
       const storageRef = storage.ref(fileName);
       
       let imageUrl = '';
       try {
-          const snapshot = await storageRef.put(fileToUpload);
-          imageUrl = await snapshot.ref.getDownloadURL();
-      } catch (uploadErr: any) {
-          console.error("Storage Upload Error:", uploadErr);
-          throw new Error(`Image upload failed: ${uploadErr.message}`);
+        const snapshot = await storageRef.put(fileToUpload);
+        imageUrl = await snapshot.ref.getDownloadURL();
+      } catch (uploadError: any) {
+        console.error("Upload failed:", uploadError);
+        throw new Error(`Image upload failed. Please try a different image. (${uploadError.code || 'Unknown'})`);
       }
 
       // 3. Save to Firestore
-      setUploadStatus('Saving listing details...');
+      setUploadStatus('Saving listing...');
       
       const price = formData.isFree ? 0 : Number(formData.price);
       const originalPrice = formData.condition === 'used' && formData.originalPrice 
@@ -206,15 +200,15 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         createdAt: Date.now(),
       });
 
-      setUploadStatus('Done!');
-      // Success!
+      setUploadStatus('Success!');
       navigate('/');
       
     } catch (error: any) {
       console.error("Error listing item:", error);
-      alert(`Error: ${error.message || "Something went wrong"}. Please check your internet and try again.`);
+      alert(`Error: ${error.message}.`);
     } finally {
       setLoading(false);
+      setUploadStatus('');
     }
   };
 
@@ -460,7 +454,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
+                  <p className="text-xs text-gray-500">PNG, JPG up to 10MB</p>
                 </div>
               )}
             </div>
@@ -469,7 +463,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           {/* Feedback & Actions */}
           <div className="pt-4 border-t border-gray-100">
             {loading && (
-              <div className="mb-4 flex items-center justify-center text-sm text-blue-600 bg-blue-50 p-2 rounded">
+              <div className="mb-4 flex items-center justify-center text-sm text-blue-600 bg-blue-50 p-2 rounded animate-pulse">
                 <Loader2 className="animate-spin h-4 w-4 mr-2" />
                 <span>{uploadStatus}</span>
               </div>
@@ -480,7 +474,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
               disabled={loading}
               className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#f7ca00] disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {loading ? 'Please Wait...' : 'List Item Now'}
+              {loading ? 'Processing...' : 'List Item Now'}
             </button>
           </div>
         </form>
