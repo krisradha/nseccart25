@@ -1,17 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { db, auth } from '../services/firebase';
-import { COLLECTIONS, Product, UserProfile } from '../types';
-import { Trash2, Shield, Users, ShoppingBag, Lock, Key, Loader2, LogOut, AlertCircle } from 'lucide-react';
+import { COLLECTIONS, Product, UserProfile, Order } from '../types';
+import { Trash2, Shield, Users, ShoppingBag, Lock, Key, Loader2, LogOut, AlertCircle, BarChart3, CheckCircle } from 'lucide-react';
 
 // Admin Credentials Configuration
-// Note: We will allow access via Password even if email doesn't match, 
-// but we show a warning if it's not the primary admin email.
 const ADMIN_EMAIL = "talkwithpritamdas@gmail.com";
 const ADMIN_PASS = "RAYGTFcHareKrishan jyTDCf25DHE";
 
 const Admin: React.FC = () => {
   const [items, setItems] = useState<Product[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [view, setView] = useState<'items' | 'users'>('items');
   const [loading, setLoading] = useState(false);
   
@@ -24,7 +23,6 @@ const Admin: React.FC = () => {
 
   const handleLogin = (e: React.FormEvent) => {
       e.preventDefault();
-      // Check strict password
       if (passwordInput.trim() === ADMIN_PASS) {
           setIsAuthorized(true);
           setAuthError('');
@@ -41,7 +39,6 @@ const Admin: React.FC = () => {
           const prodSnap = await db.collection(COLLECTIONS.PRODUCTS).get();
           const prodList: Product[] = [];
           prodSnap.forEach(d => prodList.push({ id: d.id, ...d.data() } as Product));
-          // Sort items by newest first
           prodList.sort((a, b) => b.createdAt - a.createdAt);
           setItems(prodList);
 
@@ -50,6 +47,13 @@ const Admin: React.FC = () => {
           const userList: UserProfile[] = [];
           userSnap.forEach(d => userList.push({ id: d.id, ...d.data() } as unknown as UserProfile));
           setUsers(userList);
+
+          // Fetch Orders (For Stats)
+          const orderSnap = await db.collection(COLLECTIONS.ORDERS).get();
+          const orderList: Order[] = [];
+          orderSnap.forEach(d => orderList.push({ id: d.id, ...d.data() } as Order));
+          setOrders(orderList);
+
       } catch (e) {
           console.error(e);
       } finally {
@@ -58,7 +62,7 @@ const Admin: React.FC = () => {
   };
 
   const handleDeleteItem = async (id: string) => {
-      if (!window.confirm("Are you sure you want to delete this listing? This action cannot be undone.")) return;
+      if (!window.confirm("Are you sure you want to delete this listing?")) return;
       try {
           await db.collection(COLLECTIONS.PRODUCTS).doc(id).delete();
           setItems(prev => prev.filter(p => p.id !== id));
@@ -67,7 +71,10 @@ const Admin: React.FC = () => {
       }
   };
 
-  // If user is not logged in at all
+  // Stats
+  const successfulOrdersCount = orders.filter(o => o.status === 'completed').length;
+  const activeOrdersCount = orders.filter(o => o.status === 'accepted').length;
+
   if (!currentUser) {
       return (
           <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -79,7 +86,6 @@ const Admin: React.FC = () => {
       );
   }
 
-  // Password Prompt (Always show this first unless authorized)
   if (!isAuthorized) {
       return (
           <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
@@ -97,7 +103,6 @@ const Admin: React.FC = () => {
                           <AlertCircle className="h-4 w-4 text-yellow-600 mt-0.5" />
                           <p className="text-xs text-yellow-700">
                               You are logged in as <strong>{currentUser.email}</strong>. 
-                              This is not the primary admin email, but you may proceed if you have the code.
                           </p>
                       </div>
                   )}
@@ -131,10 +136,10 @@ const Admin: React.FC = () => {
       );
   }
 
-  // Dashboard (Authorized)
   return (
     <div className="min-h-screen bg-gray-100 p-4 sm:p-6">
         <div className="max-w-6xl mx-auto">
+            {/* Header */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
                 <div className="flex items-center gap-3">
                     <div className="bg-blue-900 p-2 rounded text-white">
@@ -142,7 +147,7 @@ const Admin: React.FC = () => {
                     </div>
                     <div>
                         <h1 className="text-2xl font-bold text-gray-900 leading-none">Admin Panel</h1>
-                        <p className="text-xs text-gray-500 mt-1">Manage listings and users</p>
+                        <p className="text-xs text-gray-500 mt-1">Manage listings and verification</p>
                     </div>
                 </div>
                 <button onClick={() => setIsAuthorized(false)} className="text-sm text-red-600 hover:text-red-800 flex items-center font-medium bg-red-50 px-3 py-1 rounded-full">
@@ -150,18 +155,50 @@ const Admin: React.FC = () => {
                 </button>
             </div>
 
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex items-center">
+                    <div className="p-3 bg-green-100 rounded-full mr-4">
+                        <CheckCircle className="h-6 w-6 text-green-600" />
+                    </div>
+                    <div>
+                        <p className="text-xs text-gray-500 font-bold uppercase">Total Successful Orders</p>
+                        <p className="text-2xl font-bold text-gray-900">{successfulOrdersCount}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex items-center">
+                    <div className="p-3 bg-blue-100 rounded-full mr-4">
+                        <ShoppingBag className="h-6 w-6 text-blue-600" />
+                    </div>
+                    <div>
+                        <p className="text-xs text-gray-500 font-bold uppercase">Active Listings</p>
+                        <p className="text-2xl font-bold text-gray-900">{items.length}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex items-center">
+                    <div className="p-3 bg-purple-100 rounded-full mr-4">
+                        <Users className="h-6 w-6 text-purple-600" />
+                    </div>
+                    <div>
+                        <p className="text-xs text-gray-500 font-bold uppercase">Registered Users</p>
+                        <p className="text-2xl font-bold text-gray-900">{users.length}</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Tabs */}
             <div className="flex gap-4 mb-6">
                 <button 
                   onClick={() => setView('items')}
                   className={`flex items-center gap-2 px-6 py-2.5 rounded-md font-medium text-sm transition-colors shadow-sm ${view === 'items' ? 'bg-[#232F3E] text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                 >
-                    <ShoppingBag className="h-4 w-4" /> Listings ({items.length})
+                    <ShoppingBag className="h-4 w-4" /> Listings
                 </button>
                 <button 
                   onClick={() => setView('users')}
                   className={`flex items-center gap-2 px-6 py-2.5 rounded-md font-medium text-sm transition-colors shadow-sm ${view === 'users' ? 'bg-[#232F3E] text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                 >
-                    <Users className="h-4 w-4" /> Users ({users.length})
+                    <Users className="h-4 w-4" /> Users
                 </button>
             </div>
 
@@ -178,7 +215,6 @@ const Admin: React.FC = () => {
                                     <tr>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Product</th>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Seller</th>
-                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Price</th>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
                                         <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Action</th>
                                     </tr>
@@ -201,36 +237,27 @@ const Admin: React.FC = () => {
                                                 <div className="text-sm text-gray-900">{item.sellerName}</div>
                                                 <div className="text-xs text-gray-500">{item.sellerWhatsapp}</div>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                                {item.isFree ? (
-                                                    <span className="text-green-600">Free</span>
-                                                ) : (
-                                                    `₹${item.price}`
-                                                )}
-                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.condition === 'new' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                                                    {item.condition === 'new' ? 'New' : 'Used'}
-                                                </span>
+                                                {item.status === 'reserved' || item.status === 'sold' ? (
+                                                     <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                                        Sold Out
+                                                     </span>
+                                                ) : (
+                                                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                                        Active
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <button 
                                                     onClick={() => handleDeleteItem(item.id)} 
                                                     className="text-red-600 hover:text-red-900 bg-red-50 p-2 rounded-full hover:bg-red-100 transition"
-                                                    title="Delete Listing"
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </button>
                                             </td>
                                         </tr>
                                     ))}
-                                    {items.length === 0 && (
-                                        <tr>
-                                            <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
-                                                No listings found.
-                                            </td>
-                                        </tr>
-                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -240,9 +267,9 @@ const Admin: React.FC = () => {
                                 <thead className="bg-gray-50">
                                     <tr>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">User</th>
-                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Year & Address</th>
-                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Role</th>
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Verification</th>
                                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Contact</th>
+                                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">ID Card</th>
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
@@ -250,29 +277,25 @@ const Admin: React.FC = () => {
                                         <tr key={u.uid} className="hover:bg-gray-50">
                                             <td className="px-6 py-4 whitespace-nowrap">
                                                 <div className="text-sm font-medium text-gray-900">{u.displayName}</div>
-                                                <div className="text-xs text-gray-500">{u.email}</div>
+                                                <div className="text-xs text-gray-500">{u.collegeYear}</div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-sm text-gray-900">{u.collegeYear}</div>
-                                                <div className="text-xs text-gray-500">{u.address}</div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                <span className="capitalize bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-600 border border-gray-200">
-                                                    {u.roleIntent}
-                                                </span>
+                                                <div className="text-xs font-bold text-blue-800 bg-blue-50 px-2 py-1 rounded inline-block">
+                                                    ID: {u.studentId || 'N/A'}
+                                                </div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
                                                 {u.phoneNumber}
                                             </td>
-                                        </tr>
-                                    ))}
-                                    {users.length === 0 && (
-                                        <tr>
-                                            <td colSpan={4} className="px-6 py-10 text-center text-gray-500">
-                                                No users found.
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                {u.idCardUrl ? (
+                                                    <a href={u.idCardUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline text-xs">View ID</a>
+                                                ) : (
+                                                    <span className="text-gray-400 text-xs">No Upload</span>
+                                                )}
                                             </td>
                                         </tr>
-                                    )}
+                                    ))}
                                 </tbody>
                             </table>
                         </div>

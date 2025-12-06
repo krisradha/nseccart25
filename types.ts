@@ -6,6 +6,8 @@ export interface UserProfile {
   collegeYear: string;
   address: string;
   phoneNumber: string; // WhatsApp number
+  studentId: string; // New: Student ID Number
+  idCardUrl: string; // New: URL of uploaded ID card
   roleIntent: 'buy' | 'sell' | 'both' | 'undecided';
   agreedToTerms: boolean;
   createdAt: number;
@@ -25,6 +27,7 @@ export interface Product {
   originalPrice?: number; // Bought price (for used items)
   isFree: boolean;
   imageUrl: string;
+  status?: 'available' | 'reserved' | 'sold'; // New status field
   createdAt: number;
 }
 
@@ -39,8 +42,9 @@ export interface Order {
   sellerId: string;
   sellerName: string;
   sellerWhatsapp: string;
-  status: 'pending' | 'accepted' | 'completed' | 'rejected';
+  status: 'pending' | 'accepted' | 'completed' | 'rejected' | 'cancelled';
   createdAt: number;
+  acceptedAt?: number; // New: To track the 3-hour window
   completedAt?: number;
 }
 

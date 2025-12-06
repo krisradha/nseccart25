@@ -15,7 +15,6 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
   useEffect(() => {
     const fetchProducts = async () => {
       try {
-        // Use a simple collection query and sort client-side to avoid "Missing Index" errors
         const q = db.collection(COLLECTIONS.PRODUCTS);
         const querySnapshot = await q.get();
         const fetchedProducts: Product[] = [];
@@ -23,9 +22,7 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
           fetchedProducts.push({ id: doc.id, ...doc.data() } as Product);
         });
         
-        // Client-side sort desc
         fetchedProducts.sort((a, b) => b.createdAt - a.createdAt);
-        
         setProducts(fetchedProducts);
       } catch (error) {
         console.error("Error fetching products", error);
@@ -64,7 +61,6 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
              </Link>
           </div>
           <div className="absolute inset-0 bg-black opacity-10"></div>
-          {/* Gradient fade at bottom */}
           <div className="absolute bottom-0 left-0 w-full h-24 bg-gradient-to-t from-gray-100 to-transparent"></div>
         </div>
       </div>
@@ -97,75 +93,64 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
            {filteredProducts.length === 0 ? (
             <div className="text-center py-20 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
               <p className="text-gray-500 text-lg">No items listed yet.</p>
-              <p className="text-gray-400 text-sm mb-4">Be the first to sell something!</p>
-              <Link to="/sell" className="inline-block bg-[#ffd814] px-4 py-2 rounded-md font-medium text-gray-900 border border-[#fcd200]">
+              <Link to="/sell" className="inline-block bg-[#ffd814] px-4 py-2 rounded-md font-medium text-gray-900 border border-[#fcd200] mt-4">
                 List an Item
               </Link>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {filteredProducts.map((product) => (
-                <Link key={product.id} to={`/product/${product.id}`} className="group flex flex-col h-full border border-gray-200 hover:shadow-xl hover:border-gray-300 transition-all rounded-sm p-3 bg-white">
-                  {/* Image Container */}
-                  <div className="relative aspect-square bg-white mb-2 flex items-center justify-center overflow-hidden">
-                    {product.imageUrl ? (
-                      <img
-                        src={product.imageUrl}
-                        alt={product.title}
-                        className="max-h-full max-w-full object-contain"
-                      />
-                    ) : (
-                      <span className="text-gray-400 text-xs">No Image</span>
-                    )}
-                    
-                    {/* Badge */}
-                    {product.condition === 'used' && (
-                       <span className="absolute top-0 right-0 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg shadow-sm">
-                         USED
-                       </span>
-                    )}
-                  </div>
-                  
-                  {/* Content */}
-                  <div className="flex-1 flex flex-col text-left">
-                    <h3 className="text-sm font-medium text-gray-900 line-clamp-2 leading-snug group-hover:text-[#C7511F] transition-colors mb-1 h-10">
-                      {product.title}
-                    </h3>
-                    
-                    {/* Mock Rating */}
-                    <div className="flex items-center mb-1">
-                      <div className="flex text-[#F7CA00]">
-                        <Star className="h-3 w-3 fill-current" />
-                        <Star className="h-3 w-3 fill-current" />
-                        <Star className="h-3 w-3 fill-current" />
-                        <Star className="h-3 w-3 fill-current" />
-                        <Star className="h-3 w-3 text-gray-300" />
-                      </div>
-                      <span className="text-[10px] text-blue-600 ml-1">45</span>
-                    </div>
-
-                    <div className="mt-auto">
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-xs align-top">₹</span>
-                        <span className="text-xl font-medium text-gray-900">{product.price}</span>
-                        {product.condition === 'used' && product.originalPrice && (
-                          <span className="text-xs text-gray-500 line-through">₹{product.originalPrice}</span>
+              {filteredProducts.map((product) => {
+                  const isSoldOut = product.status === 'reserved' || product.status === 'sold';
+                  return (
+                    <Link key={product.id} to={`/product/${product.id}`} className={`group flex flex-col h-full border hover:shadow-xl hover:border-gray-300 transition-all rounded-sm p-3 bg-white ${isSoldOut ? 'opacity-70 border-gray-100' : 'border-gray-200'}`}>
+                    {/* Image Container */}
+                    <div className="relative aspect-square bg-white mb-2 flex items-center justify-center overflow-hidden">
+                        {product.imageUrl ? (
+                        <img
+                            src={product.imageUrl}
+                            alt={product.title}
+                            className={`max-h-full max-w-full object-contain ${isSoldOut ? 'grayscale' : ''}`}
+                        />
+                        ) : (
+                        <span className="text-gray-400 text-xs">No Image</span>
                         )}
-                      </div>
-                      
-                      {product.condition === 'used' && product.originalPrice && (
-                         <div className="text-[10px] text-gray-500">
-                           Save ₹{product.originalPrice - product.price}
-                         </div>
-                      )}
+                        
+                        {/* Sold Out Overlay */}
+                        {isSoldOut && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60">
+                                <span className="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded shadow-lg transform -rotate-12">
+                                    SOLD OUT
+                                </span>
+                            </div>
+                        )}
 
-                      <div className="text-[10px] text-gray-500 mt-2">
-                        Get it by <span className="font-bold text-gray-700">Tomorrow</span>
-                      </div>
+                        {/* USED Badge (only if not sold out to avoid clutter) */}
+                        {!isSoldOut && product.condition === 'used' && (
+                        <span className="absolute top-0 right-0 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg shadow-sm">
+                            USED
+                        </span>
+                        )}
                     </div>
-                  </div>
-                </Link>
-              ))}
+                    
+                    {/* Content */}
+                    <div className="flex-1 flex flex-col text-left">
+                        <h3 className="text-sm font-medium text-gray-900 line-clamp-2 leading-snug group-hover:text-[#C7511F] transition-colors mb-1 h-10">
+                        {product.title}
+                        </h3>
+                        
+                        <div className="mt-auto">
+                        <div className="flex items-baseline gap-1">
+                            <span className="text-xs align-top">₹</span>
+                            <span className="text-xl font-medium text-gray-900">{product.price}</span>
+                            {product.condition === 'used' && product.originalPrice && (
+                            <span className="text-xs text-gray-500 line-through">₹{product.originalPrice}</span>
+                            )}
+                        </div>
+                        </div>
+                    </div>
+                    </Link>
+                  );
+              })}
             </div>
           )}
         </div>

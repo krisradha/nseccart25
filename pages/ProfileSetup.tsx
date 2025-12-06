@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { User } from 'firebase/auth';
-import { db } from '../services/firebase';
+import { db, storage } from '../services/firebase';
 import { UserProfile, COLLECTIONS } from '../types';
-import { CheckCircle, AlertCircle, User as UserIcon } from 'lucide-react';
+import { CheckCircle, AlertCircle, User as UserIcon, Upload, Loader2, CreditCard } from 'lucide-react';
+import "firebase/compat/storage"; 
 
 interface ProfileSetupProps {
   user: User;
@@ -14,11 +15,18 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
     collegeYear: '1st Year',
     address: '',
     phoneNumber: '',
+    studentId: '',
     roleIntent: 'both',
     agreedToTerms: false,
   });
+  
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [error, setError] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -27,6 +35,14 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
 
   const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(prev => ({ ...prev, agreedToTerms: e.target.checked }));
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setSelectedFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -41,10 +57,37 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
       setError('Please enter a valid WhatsApp number.');
       return;
     }
+    if (!formData.studentId) {
+        setError('Student ID Number is required for verification.');
+        return;
+    }
+    if (!selectedFile) {
+        setError('Please upload a photo of your Student ID Card.');
+        return;
+    }
 
     setIsSubmitting(true);
+    setUploadStatus('Uploading ID Card...');
 
     try {
+      // 1. Upload ID Card Image
+      let idCardUrl = '';
+      if (selectedFile) {
+          const fileName = `${user.uid}_idcard.jpg`;
+          const storageRef = storage.ref().child(`verification/${fileName}`);
+          
+          // Simple upload without compression for ID cards (need clarity)
+          // relying on blob upload for stability
+          const snapshot = await storageRef.put(selectedFile, {
+            contentType: selectedFile.type || 'image/jpeg',
+            customMetadata: { uid: user.uid, type: 'id_card' }
+          });
+          
+          idCardUrl = await snapshot.ref.getDownloadURL();
+      }
+
+      // 2. Save Profile
+      setUploadStatus('Saving Profile...');
       const newProfile: UserProfile = {
         uid: user.uid,
         displayName: user.displayName || 'Student',
@@ -53,6 +96,8 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
         collegeYear: formData.collegeYear,
         address: formData.address,
         phoneNumber: formData.phoneNumber,
+        studentId: formData.studentId,
+        idCardUrl: idCardUrl,
         roleIntent: formData.roleIntent as any,
         agreedToTerms: true,
         createdAt: Date.now(),
@@ -62,7 +107,7 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
       onComplete(newProfile);
     } catch (err) {
       console.error("Error saving profile:", err);
-      setError('Failed to save profile. Please try again.');
+      setError('Failed to save profile. Please check your internet connection.');
     } finally {
       setIsSubmitting(false);
     }
@@ -78,7 +123,7 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
           Complete Your Profile
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
-          Join the NSE Cart community
+          Verification is required to ensure a safe marketplace.
         </p>
       </div>
 
@@ -86,78 +131,112 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
           <form className="space-y-6" onSubmit={handleSubmit}>
             
+            {/* Year & Address */}
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-gray-700">College Year</label>
+                    <select
+                        name="collegeYear"
+                        value={formData.collegeYear}
+                        onChange={handleChange}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    >
+                        <option>1st Year</option>
+                        <option>2nd Year</option>
+                        <option>3rd Year</option>
+                        <option>4th Year</option>
+                        <option>Alumni</option>
+                        <option>Faculty</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-700">Role</label>
+                    <select
+                        name="roleIntent"
+                        value={formData.roleIntent}
+                        onChange={handleChange}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    >
+                        <option value="buy">To Buy</option>
+                        <option value="sell">To Sell</option>
+                        <option value="both">Both</option>
+                    </select>
+                </div>
+            </div>
+
             <div>
-              <label htmlFor="collegeYear" className="block text-sm font-medium text-gray-700">
-                College Year
-              </label>
-              <select
-                id="collegeYear"
-                name="collegeYear"
-                value={formData.collegeYear}
+              <label className="block text-sm font-medium text-gray-700">Hostel / Local Address</label>
+              <input
+                name="address"
+                type="text"
+                required
+                value={formData.address}
                 onChange={handleChange}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md border"
-              >
-                <option>1st Year</option>
-                <option>2nd Year</option>
-                <option>3rd Year</option>
-                <option>4th Year</option>
-                <option>Alumni</option>
-                <option>Faculty</option>
-              </select>
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 sm:text-sm"
+                placeholder="e.g. Boys Hostel Block A, Room 202"
+              />
             </div>
 
             <div>
-              <label htmlFor="address" className="block text-sm font-medium text-gray-700">
-                Hostel / Local Address
-              </label>
-              <div className="mt-1">
-                <input
-                  id="address"
-                  name="address"
-                  type="text"
-                  required
-                  value={formData.address}
-                  onChange={handleChange}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  placeholder="e.g. Boys Hostel Block A"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
-                WhatsApp Number
-              </label>
-              <div className="mt-1">
-                <input
-                  id="phoneNumber"
-                  name="phoneNumber"
-                  type="tel"
-                  required
-                  value={formData.phoneNumber}
-                  onChange={handleChange}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  placeholder="For buyers to contact you"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="roleIntent" className="block text-sm font-medium text-gray-700">
-                What are you here for?
-              </label>
-              <select
-                id="roleIntent"
-                name="roleIntent"
-                value={formData.roleIntent}
+              <label className="block text-sm font-medium text-gray-700">WhatsApp Number</label>
+              <input
+                name="phoneNumber"
+                type="tel"
+                required
+                value={formData.phoneNumber}
                 onChange={handleChange}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md border"
-              >
-                <option value="buy">To Buy</option>
-                <option value="sell">To Sell</option>
-                <option value="both">Both</option>
-                <option value="undecided">Just Browsing</option>
-              </select>
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 sm:text-sm"
+                placeholder="For buyers to contact you"
+              />
+            </div>
+
+            {/* ID Verification Section */}
+            <div className="bg-blue-50 p-4 rounded-md border border-blue-100">
+                <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center">
+                    <CreditCard className="h-4 w-4 mr-2" /> Identity Verification
+                </h3>
+                
+                <div className="mb-4">
+                    <label className="block text-xs font-medium text-blue-800 mb-1">Student ID Number</label>
+                    <input
+                        name="studentId"
+                        type="text"
+                        required
+                        value={formData.studentId}
+                        onChange={handleChange}
+                        className="block w-full border border-blue-200 rounded-md shadow-sm py-2 px-3 sm:text-sm focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g. NSEC/2024/..."
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-xs font-medium text-blue-800 mb-2">Upload ID Card Photo</label>
+                    <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-blue-300 border-dashed rounded-md bg-white hover:bg-blue-50 cursor-pointer"
+                    >
+                        {imagePreview ? (
+                            <div className="relative">
+                                <img src={imagePreview} alt="ID Preview" className="h-32 object-contain" />
+                                <p className="text-xs text-center mt-2 text-blue-600">Click to change</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-1 text-center">
+                                <Upload className="mx-auto h-8 w-8 text-blue-400" />
+                                <div className="text-xs text-blue-600">
+                                    <span>Upload a photo</span>
+                                </div>
+                            </div>
+                        )}
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            accept="image/*"
+                            onChange={handleImageChange}
+                        />
+                    </div>
+                </div>
             </div>
 
             <div className="flex items-start">
@@ -175,7 +254,6 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
                 <label htmlFor="agreedToTerms" className="font-medium text-gray-700">
                   I agree to the Terms & Conditions and Privacy Policy
                 </label>
-                <p className="text-gray-500">I confirm I am a student/faculty of the college.</p>
               </div>
             </div>
 
@@ -198,7 +276,11 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
                 disabled={isSubmitting}
                 className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
               >
-                {isSubmitting ? 'Setting up...' : 'Complete Setup'}
+                {isSubmitting ? (
+                    <span className="flex items-center">
+                        <Loader2 className="animate-spin h-4 w-4 mr-2" /> {uploadStatus}
+                    </span>
+                ) : 'Complete Verification & Setup'}
               </button>
             </div>
           </form>
