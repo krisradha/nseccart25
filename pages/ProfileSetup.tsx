@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import * as firestore from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { UserProfile, COLLECTIONS } from '../types';
 import { CheckCircle, AlertCircle, User as UserIcon } from 'lucide-react';
@@ -59,7 +59,7 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ user, onComplete }) => {
         createdAt: Date.now(),
       };
 
-      await setDoc(doc(db, COLLECTIONS.USERS, user.uid), newProfile);
+      await firestore.setDoc(firestore.doc(db, COLLECTIONS.USERS, user.uid), newProfile);
       onComplete(newProfile);
     } catch (err) {
       console.error("Error saving profile:", err);

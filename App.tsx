@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import * as firestore from 'firebase/firestore';
 import { auth, db } from './services/firebase';
 import { UserProfile, COLLECTIONS } from './types';
 import Login from './pages/Login';
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -23,8 +24,8 @@ const App: React.FC = () => {
       if (currentUser) {
         // Fetch user profile from Firestore to check if they completed setup
         try {
-          const docRef = doc(db, COLLECTIONS.USERS, currentUser.uid);
-          const docSnap = await getDoc(docRef);
+          const docRef = firestore.doc(db, COLLECTIONS.USERS, currentUser.uid);
+          const docSnap = await firestore.getDoc(docRef);
           if (docSnap.exists()) {
             setUserProfile(docSnap.data() as UserProfile);
           } else {
@@ -45,15 +46,22 @@ const App: React.FC = () => {
   if (loading) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-gray-50">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-gray-800" />
       </div>
     );
   }
 
   return (
     <Router>
-      <div className="min-h-screen bg-gray-50 text-gray-900">
-        {user && userProfile && <Navbar user={user} profile={userProfile} />}
+      <div className="min-h-screen bg-gray-100 text-gray-900 font-sans">
+        {user && userProfile && (
+          <Navbar 
+            user={user} 
+            profile={userProfile} 
+            onSearch={setSearchQuery} 
+            searchValue={searchQuery}
+          />
+        )}
         <Routes>
           <Route
             path="/login"
@@ -73,7 +81,7 @@ const App: React.FC = () => {
             path="/"
             element={
               <ProtectedRoute user={user} userProfile={userProfile}>
-                <Home />
+                <Home searchQuery={searchQuery} />
               </ProtectedRoute>
             }
           />
