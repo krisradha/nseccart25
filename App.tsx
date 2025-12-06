@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore/lite';
+import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './services/firebase';
 import { UserProfile, COLLECTIONS } from './types';
 import Login from './pages/Login';
@@ -10,6 +10,7 @@ import Home from './pages/Home';
 import SellItem from './pages/SellItem';
 import ProductDetail from './pages/ProductDetail';
 import Legal from './pages/Legal';
+import Value from './pages/Value';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import { Loader2 } from 'lucide-react';
@@ -77,6 +78,7 @@ const App: React.FC = () => {
             <Route path="/terms" element={<Legal type="terms" />} />
             <Route path="/privacy" element={<Legal type="privacy" />} />
             <Route path="/contact" element={<Legal type="contact" />} />
+            <Route path="/value" element={<Value />} />
 
             {/* Auth Routes */}
             <Route
