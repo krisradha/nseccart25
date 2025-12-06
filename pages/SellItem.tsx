@@ -23,6 +23,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   // Debug & fallback states
   const [logs, setLogs] = useState<string[]>([]);
   const [skipCompression, setSkipCompression] = useState(false);
+  const isTimedOut = useRef(false);
 
   const [formData, setFormData] = useState({
     title: '',
@@ -77,8 +78,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     // If small enough, don't touch it
-    if (file.size < 1024 * 1024) { // 1MB
-        addLog("File under 1MB, skipping compression.");
+    if (file.size < 500 * 1024) { // 500KB
+        addLog("File under 500KB, skipping compression.");
         return file;
     }
 
@@ -87,9 +88,9 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
-            addLog("Compression timed out (2s). Using original.");
+            addLog("Compression timed out (3s). Using original.");
             resolve(file);
-        }, 2000); 
+        }, 3000); 
 
         const img = new Image();
         img.src = URL.createObjectURL(file);
@@ -97,7 +98,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         img.onload = () => {
             try {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 800;
+                const MAX_WIDTH = 600; // Reduced from 800 for faster mobile uploads
                 const scale = MAX_WIDTH / img.width;
                 const width = scale < 1 ? MAX_WIDTH : img.width;
                 const height = scale < 1 ? img.height * scale : img.height;
@@ -118,7 +119,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                         addLog("Blob creation failed, using original.");
                         resolve(file);
                     }
-                }, 'image/jpeg', 0.7);
+                }, 'image/jpeg', 0.6); // Quality 0.6
             } catch (e) {
                 clearTimeout(timer);
                 addLog(`Compression error: ${e}`);
@@ -167,6 +168,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     e.preventDefault();
     setLogs([]); // Clear logs
     addLog("Submit started.");
+    isTimedOut.current = false;
 
     if (!selectedFile) { alert("Please upload an image."); return; }
     if (!formData.title) { alert("Please enter a title."); return; }
@@ -192,15 +194,17 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             customMetadata: { uploader: user.uid }
         });
 
-        // Safety timeout for upload
+        // Safety timeout for upload (Increased to 60s)
         const uploadTimeout = setTimeout(() => {
             if (uploadTask.snapshot.state === 'running') {
+                isTimedOut.current = true;
                 uploadTask.cancel();
-                addLog("Upload timed out (20s).");
+                addLog("Upload timed out (60s).");
                 setLoading(false);
-                alert("Upload timed out. Check internet or try 'Skip Compression'.");
+                setUploadStatus("Timed Out");
+                alert("Upload took too long (>60s). \n\nTip: Try enabling 'Skip Image Compression' or check your internet connection.");
             }
-        }, 20000);
+        }, 60000);
 
         uploadTask.on(
             "state_changed",
@@ -211,6 +215,13 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             },
             (error) => {
                 clearTimeout(uploadTimeout);
+                
+                // If we forced the cancel due to timeout, ignore this error callback to avoid double alerts
+                if (isTimedOut.current || error.code === 'storage/canceled') {
+                    addLog("Upload canceled by system or user.");
+                    return; 
+                }
+
                 console.error("Upload error:", error);
                 addLog(`Upload Error: ${error.message}`);
                 setLoading(false);
@@ -457,7 +468,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             
             {/* Direct Upload Toggle */}
             {selectedFile && (
-                <div className="mt-2 flex items-center">
+                <div className="mt-2 flex items-center bg-blue-50 p-2 rounded border border-blue-100">
                     <input 
                         type="checkbox"
                         id="skipCompression"
@@ -466,8 +477,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                         onChange={handleCheckboxChange}
                         className="h-4 w-4 text-blue-600 rounded border-gray-300"
                     />
-                    <label htmlFor="skipCompression" className="ml-2 text-xs text-gray-500">
-                        Skip image compression (Check if upload is hanging)
+                    <label htmlFor="skipCompression" className="ml-2 text-xs text-blue-800">
+                        <strong>Having upload issues?</strong> Check this box to skip image optimization (Direct Upload).
                     </label>
                 </div>
             )}
