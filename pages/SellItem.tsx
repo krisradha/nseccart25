@@ -5,7 +5,7 @@ import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, ChevronLeft, Phone, X, AlertCircle } from 'lucide-react';
+import { Sparkles, Upload, Loader2, ChevronLeft, Phone, AlertCircle, Terminal } from 'lucide-react';
 import "firebase/compat/storage"; 
 
 interface SellItemProps {
@@ -20,6 +20,10 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [generatingDesc, setGeneratingDesc] = useState(false);
   
+  // Debug & fallback states
+  const [logs, setLogs] = useState<string[]>([]);
+  const [skipCompression, setSkipCompression] = useState(false);
+
   const [formData, setFormData] = useState({
     title: '',
     category: 'Books',
@@ -35,7 +39,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Cleanup object URL
+  const addLog = (msg: string) => setLogs(prev => [...prev, `${new Date().toLocaleTimeString()}: ${msg}`]);
+
   useEffect(() => {
     return () => {
       if (imagePreview) URL.revokeObjectURL(imagePreview);
@@ -51,6 +56,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     const { name, checked } = e.target;
     if (name === 'isFree') {
         setFormData(prev => ({ ...prev, isFree: checked, price: checked ? '0' : prev.price }));
+    } else if (name === 'skipCompression') {
+        setSkipCompression(checked);
     }
   };
 
@@ -59,23 +66,30 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       const file = e.target.files[0];
       setSelectedFile(file);
       setImagePreview(URL.createObjectURL(file));
+      addLog(`Selected file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     }
   };
 
-  // Safe Resize Function - Returns original file if resize fails/times out
   const prepareImageForUpload = async (file: File): Promise<Blob | File> => {
+    if (skipCompression) {
+        addLog("Skipping compression as requested.");
+        return file;
+    }
+    
     // If small enough, don't touch it
     if (file.size < 1024 * 1024) { // 1MB
+        addLog("File under 1MB, skipping compression.");
         return file;
     }
 
+    addLog("Starting image optimization...");
     setUploadStatus("Optimizing image...");
     
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
-            console.warn("Resize timed out, using original");
+            addLog("Compression timed out (2s). Using original.");
             resolve(file);
-        }, 2000); // 2 second timeout max
+        }, 2000); 
 
         const img = new Image();
         img.src = URL.createObjectURL(file);
@@ -91,24 +105,30 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 canvas.width = width;
                 canvas.height = height;
                 const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0, width, height);
+                if (!ctx) throw new Error("No canvas context");
+
+                ctx.drawImage(img, 0, 0, width, height);
 
                 canvas.toBlob((blob) => {
                     clearTimeout(timer);
                     if (blob) {
+                        addLog(`Compressed to ${(blob.size / 1024).toFixed(2)} KB`);
                         resolve(blob);
                     } else {
+                        addLog("Blob creation failed, using original.");
                         resolve(file);
                     }
                 }, 'image/jpeg', 0.7);
             } catch (e) {
                 clearTimeout(timer);
+                addLog(`Compression error: ${e}`);
                 resolve(file);
             }
         };
 
-        img.onerror = () => {
+        img.onerror = (e) => {
             clearTimeout(timer);
+            addLog("Image load error during compression.");
             resolve(file);
         };
     });
@@ -124,17 +144,32 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       const desc = await generateProductDescription(formData.title, formData.condition, formData.category);
       setFormData(prev => ({ ...prev, description: desc }));
     } catch (error) {
-      alert("Could not generate description.");
+      addLog("AI Gen Error");
     } finally {
       setGeneratingDesc(false);
     }
   };
 
+  const sanitizeData = (data: any) => {
+    // Remove undefined values to prevent Firestore crash
+    const clean: any = {};
+    Object.keys(data).forEach(key => {
+        if (data[key] !== undefined) {
+            clean[key] = data[key];
+        } else {
+            clean[key] = null;
+        }
+    });
+    return clean;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLogs([]); // Clear logs
+    addLog("Submit started.");
+
     if (!selectedFile) { alert("Please upload an image."); return; }
     if (!formData.title) { alert("Please enter a title."); return; }
-    if (!formData.whatsappNumber) { alert("WhatsApp number required."); return; }
     
     setLoading(true);
     setUploadProgress(0);
@@ -142,21 +177,30 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     try {
         // 1. Prepare Image
         const fileToUpload = await prepareImageForUpload(selectedFile);
-        
+        addLog("Image prepared for upload.");
+
         // 2. Upload to Firebase Storage
-        const fileName = `${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
-        // Store in a user-specific folder to keep things organized
+        const fileName = `${Date.now()}_img.jpg`;
         const storagePath = `products/${user.uid}/${fileName}`;
         const storageRef = storage.ref().child(storagePath);
         
-        setUploadStatus("Starting upload...");
+        setUploadStatus("Uploading...");
+        addLog(`Uploading to ${storagePath}`);
         
         const uploadTask = storageRef.put(fileToUpload, {
-            contentType: 'image/jpeg', // Explicitly set content type
-            customMetadata: {
-                uploader: user.uid
-            }
+            contentType: 'image/jpeg',
+            customMetadata: { uploader: user.uid }
         });
+
+        // Safety timeout for upload
+        const uploadTimeout = setTimeout(() => {
+            if (uploadTask.snapshot.state === 'running') {
+                uploadTask.cancel();
+                addLog("Upload timed out (20s).");
+                setLoading(false);
+                alert("Upload timed out. Check internet or try 'Skip Compression'.");
+            }
+        }, 20000);
 
         uploadTask.on(
             "state_changed",
@@ -166,27 +210,32 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 setUploadStatus(`Uploading... ${Math.round(progress)}%`);
             },
             (error) => {
+                clearTimeout(uploadTimeout);
                 console.error("Upload error:", error);
+                addLog(`Upload Error: ${error.message}`);
                 setLoading(false);
                 setUploadStatus("Upload failed.");
                 alert(`Upload Failed: ${error.message}`);
             },
             async () => {
-                // Upload Complete
-                setUploadStatus("Processing...");
+                clearTimeout(uploadTimeout);
+                addLog("Upload complete. Getting URL...");
+                setUploadStatus("Saving details...");
+                
                 try {
                     const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
-                    
+                    addLog(`URL: ${downloadURL.substring(0, 20)}...`);
+
                     // 3. Save to Firestore
                     const price = formData.isFree ? 0 : Number(formData.price || 0);
                     const originalPrice = formData.condition === 'used' && formData.originalPrice 
                         ? Number(formData.originalPrice) 
                         : null;
 
-                    await db.collection(COLLECTIONS.PRODUCTS).add({
+                    const productData = {
                         sellerId: user.uid,
                         sellerName: profile.displayName || 'Student',
-                        sellerWhatsapp: formData.whatsappNumber,
+                        sellerWhatsapp: formData.whatsappNumber || '',
                         title: formData.title,
                         description: formData.description || 'No description provided.',
                         category: formData.category,
@@ -196,20 +245,32 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                         isFree: formData.isFree,
                         imageUrl: downloadURL,
                         createdAt: Date.now(),
-                    });
+                    };
 
+                    addLog("Writing to Firestore...");
+                    // Using sanitize to be safe
+                    await db.collection(COLLECTIONS.PRODUCTS).add(sanitizeData(productData));
+                    
+                    addLog("Firestore Write Success.");
                     setUploadStatus("Success!");
-                    setTimeout(() => navigate('/'), 500);
+                    
+                    // Delay slightly to show success
+                    setTimeout(() => {
+                        navigate('/');
+                    }, 500);
+
                 } catch (dbError: any) {
                     console.error("Database error:", dbError);
+                    addLog(`DB Error: ${dbError.message}`);
                     setLoading(false);
-                    alert("Image uploaded but failed to save details. Please try again.");
+                    alert(`Saved image, but DB failed: ${dbError.message}`);
                 }
             }
         );
 
     } catch (err: any) {
         console.error("Submission error:", err);
+        addLog(`General Error: ${err.message}`);
         setLoading(false);
         alert(`Error: ${err.message}`);
     }
@@ -393,6 +454,23 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 onChange={handleImageChange} 
               />
             </div>
+            
+            {/* Direct Upload Toggle */}
+            {selectedFile && (
+                <div className="mt-2 flex items-center">
+                    <input 
+                        type="checkbox"
+                        id="skipCompression"
+                        name="skipCompression"
+                        checked={skipCompression}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 text-blue-600 rounded border-gray-300"
+                    />
+                    <label htmlFor="skipCompression" className="ml-2 text-xs text-gray-500">
+                        Skip image compression (Check if upload is hanging)
+                    </label>
+                </div>
+            )}
           </div>
 
           {/* Progress Bar */}
@@ -420,6 +498,18 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             </button>
           </div>
         </form>
+
+        {/* Status Logs for Debugging */}
+        <div className="mt-8 bg-black text-green-400 p-4 rounded-md text-xs font-mono h-40 overflow-y-auto">
+            <div className="flex items-center mb-2 text-gray-400 border-b border-gray-700 pb-1">
+                <Terminal className="h-3 w-3 mr-2" /> System Status Log
+            </div>
+            {logs.length === 0 ? (
+                <span className="opacity-50">Waiting for action...</span>
+            ) : (
+                logs.map((log, i) => <div key={i}>{log}</div>)
+            )}
+        </div>
       </div>
     </div>
   );
