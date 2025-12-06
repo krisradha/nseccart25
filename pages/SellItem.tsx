@@ -5,7 +5,7 @@ import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone, AlertCircle } from 'lucide-react';
+import { Sparkles, Upload, Loader2, DollarSign, ChevronLeft, Phone } from 'lucide-react';
 import "firebase/compat/storage"; 
 
 interface SellItemProps {
@@ -44,7 +44,9 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
-  // --- AGGRESSIVE IMAGE RESIZER ---
+  // --- SIMPLE & AGGRESSIVE IMAGE RESIZER ---
+  // Reduces image to max 500px and 0.5 quality to ensure tiny file size (~50KB)
+  // This prevents upload timeouts on mobile networks.
   const resizeImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -54,22 +56,19 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          // Reduced to 600px for guaranteed upload success on slow networks
-          const MAX_WIDTH = 600;
-          const MAX_HEIGHT = 600;
+          const MAX_SIZE = 500; // Very small to ensure success
           let width = img.width;
           let height = img.height;
 
-          // Calculate new dimensions
           if (width > height) {
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
             }
           } else {
-            if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
-              height = MAX_HEIGHT;
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
             }
           }
 
@@ -78,8 +77,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
           
-          // Compress to JPEG 0.6 quality (Very small file size)
-          resolve(canvas.toDataURL('image/jpeg', 0.6));
+          // Compress heavily (0.5)
+          resolve(canvas.toDataURL('image/jpeg', 0.5));
         };
         img.onerror = (err) => reject(err);
       };
@@ -92,7 +91,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       const file = e.target.files[0];
       
       if (!file.type.startsWith('image/')) {
-        alert("Please upload an image file.");
+        alert("Please upload a valid image file (JPG/PNG).");
         return;
       }
 
@@ -103,12 +102,12 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         setUploadStatus(''); 
       } catch (err) {
         console.error("Resize failed", err);
-        // Fallback to original file if resize fails (read as base64)
+        // Fallback to original if resize fails
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = (ev) => {
             setImagePreview(ev.target?.result as string);
-            setUploadStatus('Warning: Using original large image.');
+            setUploadStatus('Using original image.');
         };
       }
     }
@@ -144,87 +143,69 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
       return;
     }
     if (!formData.whatsappNumber || formData.whatsappNumber.length < 10) {
-      alert("Please provide a valid WhatsApp number (10 digits).");
+      alert("Please provide a valid WhatsApp number.");
       return;
     }
     
     setLoading(true);
     
-    try {
-      // 1. Upload to Firebase Storage
-      setUploadStatus('Uploading image (0%)...');
-      const fileName = `products/${user.uid}/${Date.now()}_img.jpg`;
-      const storageRef = storage.ref(fileName);
-      
-      let imageUrl = '';
+    // 1. UPLOAD IMAGE
+    const fileName = `products/${user.uid}/${Date.now()}`;
+    const storageRef = storage.ref().child(fileName);
+    const uploadTask = storageRef.putString(imagePreview, 'data_url');
 
-      // Create Upload Task
-      const uploadTask = storageRef.putString(imagePreview, 'data_url');
+    // Monitor Progress
+    uploadTask.on('state_changed', 
+        (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            setUploadStatus(`Uploading... ${Math.round(progress)}%`);
+        },
+        (error) => {
+            // Handle Errors
+            console.error("Upload error:", error);
+            setLoading(false);
+            alert(`Upload Failed: ${error.message}. Please try again.`);
+        },
+        async () => {
+            // Upload Complete
+            try {
+                setUploadStatus('Saving details...');
+                const imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
 
-      // Wrap in a promise to handle timeout and progress
-      await new Promise<void>((resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-              uploadTask.cancel();
-              reject(new Error("Upload timed out (15s). Internet too slow."));
-          }, 15000);
+                // 2. SAVE TO DATABASE
+                const price = formData.isFree ? 0 : Number(formData.price);
+                const originalPrice = formData.condition === 'used' && formData.originalPrice 
+                  ? Number(formData.originalPrice) 
+                  : undefined;
 
-          uploadTask.on(
-              'state_changed',
-              (snapshot) => {
-                  const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                  setUploadStatus(`Uploading image (${Math.round(progress)}%)...`);
-              },
-              (error) => {
-                  clearTimeout(timeoutId);
-                  reject(error);
-              },
-              async () => {
-                  clearTimeout(timeoutId);
-                  try {
-                    imageUrl = await uploadTask.snapshot.ref.getDownloadURL();
-                    resolve();
-                  } catch (err) {
-                    reject(err);
-                  }
-              }
-          );
-      });
+                await db.collection(COLLECTIONS.PRODUCTS).add({
+                  sellerId: user.uid,
+                  sellerName: profile.displayName || 'Student',
+                  sellerWhatsapp: formData.whatsappNumber,
+                  title: formData.title,
+                  description: formData.description || 'No description provided.',
+                  category: formData.category,
+                  condition: formData.condition,
+                  price: price,
+                  originalPrice: originalPrice || null,
+                  isFree: formData.isFree,
+                  imageUrl: imageUrl,
+                  createdAt: Date.now(),
+                });
 
-      // 2. Save to Firestore
-      setUploadStatus('Saving details...');
-      
-      const price = formData.isFree ? 0 : Number(formData.price);
-      const originalPrice = formData.condition === 'used' && formData.originalPrice 
-        ? Number(formData.originalPrice) 
-        : undefined;
+                setUploadStatus('Success!');
+                // Slight delay so user sees "Success"
+                setTimeout(() => {
+                    navigate('/');
+                }, 1000);
 
-      await db.collection(COLLECTIONS.PRODUCTS).add({
-        sellerId: user.uid,
-        sellerName: profile.displayName || 'Student',
-        sellerWhatsapp: formData.whatsappNumber,
-        title: formData.title,
-        description: formData.description || 'No description provided.',
-        category: formData.category,
-        condition: formData.condition,
-        price: price,
-        originalPrice: originalPrice || null,
-        isFree: formData.isFree,
-        imageUrl: imageUrl,
-        createdAt: Date.now(),
-      });
-
-      setUploadStatus('Success!');
-      setTimeout(() => {
-        navigate('/');
-      }, 500);
-      
-    } catch (error: any) {
-      console.error("Error listing item:", error);
-      alert(`Error: ${error.message || "Something went wrong"}. Try again.`);
-      setUploadStatus('Failed.');
-    } finally {
-      setLoading(false);
-    }
+            } catch (dbError: any) {
+                console.error("Database error:", dbError);
+                setLoading(false);
+                alert("Image uploaded but failed to save details: " + dbError.message);
+            }
+        }
+    );
   };
 
   const savings = (formData.condition === 'used' && formData.originalPrice && formData.price && !formData.isFree)
@@ -407,9 +388,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                 placeholder="9876543210"
               />
             </div>
-            <p className="mt-1 text-xs text-gray-500">
-              This number will be visible to buyers after they place an order.
-            </p>
           </div>
 
           {/* Description & AI */}
@@ -436,7 +414,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
               value={formData.description}
               onChange={handleChange}
               className="shadow-sm focus:ring-[#febd69] focus:border-[#febd69] block w-full sm:text-sm border-gray-300 rounded-md border p-2"
-              placeholder="What makes this item great? Mention any defects if used."
+              placeholder="Describe the item condition, author, etc."
             />
           </div>
 
@@ -469,30 +447,23 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                       <input id="file-upload" name="file-upload" type="file" className="sr-only" accept="image/*" onChange={handleImageChange} />
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500">JPG, PNG (Auto-resized)</p>
+                  <p className="text-xs text-gray-500">JPG, PNG (Max 500px, Auto-resized)</p>
                 </div>
               )}
             </div>
             {uploadStatus && (
-                <p className="text-xs text-center text-blue-600 mt-2 font-mono">{uploadStatus}</p>
+                <p className="text-xs text-center text-blue-600 mt-2 font-mono font-bold animate-pulse">{uploadStatus}</p>
             )}
           </div>
 
-          {/* Feedback & Actions */}
+          {/* Submit */}
           <div className="pt-4 border-t border-gray-100">
-            {loading && (
-              <div className="mb-4 flex items-center justify-center text-sm text-blue-600 bg-blue-50 p-2 rounded animate-pulse">
-                <Loader2 className="animate-spin h-4 w-4 mr-2" />
-                <span>Processing... {uploadStatus}</span>
-              </div>
-            )}
-            
             <button
               type="submit"
               disabled={loading}
               className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-gray-900 bg-[#ffd814] hover:bg-[#f7ca00] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#f7ca00] disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {loading ? 'Please Wait...' : 'List Item Now'}
+              {loading ? 'Listing Item...' : 'List Item Now'}
             </button>
           </div>
         </form>
