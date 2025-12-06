@@ -21,7 +21,7 @@ const Admin: React.FC = () => {
           // Fetch Users
           const userSnap = await db.collection(COLLECTIONS.USERS).get();
           const userList: UserProfile[] = [];
-          userSnap.forEach(d => userList.push({ id: d.id, ...d.data() } as UserProfile));
+          userSnap.forEach(d => userList.push({ id: d.id, ...d.data() } as unknown as UserProfile));
           setUsers(userList);
       } catch (e) {
           console.error(e);

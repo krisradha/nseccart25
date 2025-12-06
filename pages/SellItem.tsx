@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { User } from 'firebase/auth';
 import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
@@ -11,41 +11,70 @@ interface SellItemProps {
   profile: UserProfile;
 }
 
-// Helper to compress image
+// Robust helper to compress image with timeout fallback
 const compressImage = (file: File): Promise<Blob> => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    // Set a timeout to return original file if compression hangs/takes too long
+    const timeOutId = setTimeout(() => {
+      console.warn("Image compression timed out. Using original file.");
+      resolve(file);
+    }, 2500); // 2.5 seconds timeout
+
     const reader = new FileReader();
     reader.readAsDataURL(file);
+    
     reader.onload = (event) => {
       const img = new Image();
       img.src = event.target?.result as string;
+      
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800; 
-        let width = img.width;
-        let height = img.height;
+        try {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 1000; 
+          let width = img.width;
+          let height = img.height;
 
-        if (width > MAX_WIDTH) {
-          height *= MAX_WIDTH / width;
-          width = MAX_WIDTH;
-        }
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          canvas.toBlob((blob) => {
-            if (blob) resolve(blob);
-            else reject(new Error('Image compression failed'));
-          }, 'image/jpeg', 0.7);
-        } else {
-          reject(new Error('Could not get canvas context'));
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+              clearTimeout(timeOutId);
+              if (blob) {
+                 resolve(blob);
+              } else {
+                 console.warn("Canvas toBlob failed. Using original.");
+                 resolve(file);
+              }
+            }, 'image/jpeg', 0.8);
+          } else {
+            clearTimeout(timeOutId);
+            resolve(file);
+          }
+        } catch (e) {
+          clearTimeout(timeOutId);
+          console.warn("Compression error:", e);
+          resolve(file);
         }
       };
-      img.onerror = (err) => reject(err);
+      
+      img.onerror = () => {
+        clearTimeout(timeOutId);
+        resolve(file);
+      };
     };
-    reader.onerror = (err) => reject(err);
+    
+    reader.onerror = () => {
+      clearTimeout(timeOutId);
+      resolve(file);
+    };
   });
 };
 
@@ -63,7 +92,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     isFree: false,
     originalPrice: '',
     description: '',
-    whatsappNumber: profile.phoneNumber || ''
+    whatsappNumber: profile?.phoneNumber || ''
   });
   
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -107,74 +136,89 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validation
     if (!imageFile) {
       alert("Please upload an image of the item.");
       return;
     }
-    if (!formData.whatsappNumber || formData.whatsappNumber.length < 10) {
-      alert("Please provide a valid WhatsApp number for this listing.");
+    if (!formData.title) {
+      alert("Please enter a title.");
       return;
+    }
+    if (!formData.whatsappNumber || formData.whatsappNumber.length < 10) {
+      alert("Please provide a valid WhatsApp number (10 digits).");
+      return;
+    }
+    if (!formData.isFree && (!formData.price || Number(formData.price) < 0)) {
+        alert("Please enter a valid price.");
+        return;
     }
     
     setLoading(true);
-    setUploadStatus('Preparing image...');
-
+    
     try {
       // 1. Compress Image
-      setUploadStatus('Optimizing image...');
-      let compressedImageBlob: Blob;
+      setUploadStatus('Processing image...');
+      let fileToUpload: Blob;
       try {
-        compressedImageBlob = await compressImage(imageFile);
+        fileToUpload = await compressImage(imageFile);
       } catch (err) {
-        console.warn("Compression failed, using original", err);
-        compressedImageBlob = imageFile;
+        console.warn("Compression system failed, falling back", err);
+        fileToUpload = imageFile;
       }
 
       // 2. Upload Image
-      setUploadStatus('Uploading to cloud...');
-      const fileName = `products/${user.uid}/${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+      setUploadStatus('Uploading image to cloud...');
+      // Safe filename with timestamp
+      const fileName = `products/${user.uid}/${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
       const storageRef = storage.ref(fileName);
       
-      const snapshot = await storageRef.put(compressedImageBlob);
-      const imageUrl = await snapshot.ref.getDownloadURL();
+      let imageUrl = '';
+      try {
+          const snapshot = await storageRef.put(fileToUpload);
+          imageUrl = await snapshot.ref.getDownloadURL();
+      } catch (uploadErr: any) {
+          console.error("Storage Upload Error:", uploadErr);
+          throw new Error(`Image upload failed: ${uploadErr.message}`);
+      }
 
-      // 3. Prepare Data
-      setUploadStatus('Creating listing...');
+      // 3. Save to Firestore
+      setUploadStatus('Saving listing details...');
+      
       const price = formData.isFree ? 0 : Number(formData.price);
       const originalPrice = formData.condition === 'used' && formData.originalPrice 
         ? Number(formData.originalPrice) 
         : undefined;
 
-      if (!formData.isFree && isNaN(price)) {
-         throw new Error("Invalid price entered");
-      }
-
-      // 4. Save to Firestore
       await db.collection(COLLECTIONS.PRODUCTS).add({
         sellerId: user.uid,
-        sellerName: profile.displayName || 'Unknown Seller',
+        sellerName: profile.displayName || 'Student',
         sellerWhatsapp: formData.whatsappNumber,
         title: formData.title,
-        description: formData.description,
+        description: formData.description || 'No description provided.',
         category: formData.category,
         condition: formData.condition,
         price: price,
-        originalPrice: originalPrice,
+        originalPrice: originalPrice || null,
         isFree: formData.isFree,
         imageUrl: imageUrl,
         createdAt: Date.now(),
       });
 
+      setUploadStatus('Done!');
       // Success!
       navigate('/');
+      
     } catch (error: any) {
       console.error("Error listing item:", error);
-      alert(`Failed to list item: ${error.message || 'Unknown error'}. Please try again.`);
+      alert(`Error: ${error.message || "Something went wrong"}. Please check your internet and try again.`);
+    } finally {
       setLoading(false);
-    } 
+    }
   };
 
-  const savings = (formData.condition === 'used' && formData.originalPrice && formData.price)
+  const savings = (formData.condition === 'used' && formData.originalPrice && formData.price && !formData.isFree)
     ? Number(formData.originalPrice) - Number(formData.price)
     : 0;
 
@@ -282,7 +326,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                           type="number"
                           name="originalPrice"
                           id="originalPrice"
-                          required
                           min="0"
                           value={formData.originalPrice}
                           onChange={handleChange}
