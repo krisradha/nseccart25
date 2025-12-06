@@ -5,7 +5,7 @@ import { db, storage } from '../services/firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { UserProfile, COLLECTIONS } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Upload, Loader2, ChevronLeft, Phone, AlertCircle, Terminal } from 'lucide-react';
+import { Sparkles, Upload, Loader2, ChevronLeft, Phone, Image as ImageIcon, Link as LinkIcon, Book, Monitor, PenTool, Shirt, Dribbble, Terminal } from 'lucide-react';
 import "firebase/compat/storage"; 
 
 interface SellItemProps {
@@ -20,6 +20,10 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [generatingDesc, setGeneratingDesc] = useState(false);
   
+  // Image Input Mode
+  const [imageMode, setImageMode] = useState<'upload' | 'default' | 'link'>('upload');
+  const [externalLink, setExternalLink] = useState('');
+
   // Debug & fallback states
   const [logs, setLogs] = useState<string[]>([]);
   const [skipCompression, setSkipCompression] = useState(false);
@@ -44,9 +48,9 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
   useEffect(() => {
     return () => {
-      if (imagePreview) URL.revokeObjectURL(imagePreview);
+      if (imagePreview && imageMode === 'upload') URL.revokeObjectURL(imagePreview);
     };
-  }, [imagePreview]);
+  }, [imagePreview, imageMode]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -71,6 +75,18 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
   };
 
+  const handleDefaultIconSelect = (url: string) => {
+      setImagePreview(url);
+      setSelectedFile(null); // Clear file
+  };
+
+  const handleLinkChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setExternalLink(e.target.value);
+      setImagePreview(e.target.value);
+      setSelectedFile(null);
+  };
+
+  // --- IMAGE PREPARATION LOGIC ---
   const prepareImageForUpload = async (file: File): Promise<Blob | File> => {
     if (skipCompression) {
         addLog("Skipping compression as requested.");
@@ -78,8 +94,8 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
     }
     
     // If small enough, don't touch it
-    if (file.size < 500 * 1024) { // 500KB
-        addLog("File under 500KB, skipping compression.");
+    if (file.size < 1024 * 1024) { // 1MB
+        addLog("File under 1MB, skipping compression.");
         return file;
     }
 
@@ -98,7 +114,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         img.onload = () => {
             try {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 600; // Reduced from 800 for faster mobile uploads
+                const MAX_WIDTH = 800; 
                 const scale = MAX_WIDTH / img.width;
                 const width = scale < 1 ? MAX_WIDTH : img.width;
                 const height = scale < 1 ? img.height * scale : img.height;
@@ -119,7 +135,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
                         addLog("Blob creation failed, using original.");
                         resolve(file);
                     }
-                }, 'image/jpeg', 0.6); // Quality 0.6
+                }, 'image/jpeg', 0.7);
             } catch (e) {
                 clearTimeout(timer);
                 addLog(`Compression error: ${e}`);
@@ -152,7 +168,6 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
   };
 
   const sanitizeData = (data: any) => {
-    // Remove undefined values to prevent Firestore crash
     const clean: any = {};
     Object.keys(data).forEach(key => {
         if (data[key] !== undefined) {
@@ -166,126 +181,112 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLogs([]); // Clear logs
+    setLogs([]);
     addLog("Submit started.");
     isTimedOut.current = false;
 
-    if (!selectedFile) { alert("Please upload an image."); return; }
     if (!formData.title) { alert("Please enter a title."); return; }
     
+    // Check if image is present based on mode
+    if (imageMode === 'upload' && !selectedFile) { alert("Please upload an image or choose another method."); return; }
+    if (imageMode === 'link' && !externalLink) { alert("Please enter an image link."); return; }
+    if (imageMode === 'default' && !imagePreview) { alert("Please select an icon."); return; }
+
     setLoading(true);
     setUploadProgress(0);
     
     try {
-        // 1. Prepare Image
-        const fileToUpload = await prepareImageForUpload(selectedFile);
-        addLog("Image prepared for upload.");
+        let finalImageUrl = imagePreview || '';
 
-        // 2. Upload to Firebase Storage
-        const fileName = `${Date.now()}_img.jpg`;
-        const storagePath = `products/${user.uid}/${fileName}`;
-        const storageRef = storage.ref().child(storagePath);
+        // Handle File Upload ONLY if mode is 'upload'
+        if (imageMode === 'upload' && selectedFile) {
+            const fileToUpload = await prepareImageForUpload(selectedFile);
+            addLog("Image prepared for upload.");
+
+            const fileName = `${Date.now()}_img.jpg`;
+            const storagePath = `products/${user.uid}/${fileName}`;
+            const storageRef = storage.ref().child(storagePath);
+            
+            setUploadStatus("Uploading...");
+            addLog(`Uploading to ${storagePath}`);
+            
+            const uploadTask = storageRef.put(fileToUpload, {
+                contentType: 'image/jpeg',
+                customMetadata: { uploader: user.uid }
+            });
+
+            // Promisify the upload task to handle it cleaner
+            await new Promise<void>((resolve, reject) => {
+                uploadTask.on(
+                    "state_changed",
+                    (snapshot) => {
+                        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                        setUploadProgress(progress);
+                        setUploadStatus(`Uploading... ${Math.round(progress)}%`);
+                    },
+                    (error) => {
+                        console.error("Upload error:", error);
+                        reject(error);
+                    },
+                    async () => {
+                        const url = await uploadTask.snapshot.ref.getDownloadURL();
+                        finalImageUrl = url;
+                        resolve();
+                    }
+                );
+            });
+        }
+
+        addLog("Image URL secured. Saving details...");
+
+        // 3. Save to Firestore
+        const price = formData.isFree ? 0 : Number(formData.price || 0);
+        const originalPrice = formData.condition === 'used' && formData.originalPrice 
+            ? Number(formData.originalPrice) 
+            : null;
+
+        const productData = {
+            sellerId: user.uid,
+            sellerName: profile.displayName || 'Student',
+            sellerWhatsapp: formData.whatsappNumber || '',
+            title: formData.title,
+            description: formData.description || 'No description provided.',
+            category: formData.category,
+            condition: formData.condition,
+            price: price,
+            originalPrice: originalPrice,
+            isFree: formData.isFree,
+            imageUrl: finalImageUrl,
+            createdAt: Date.now(),
+        };
+
+        addLog("Writing to Firestore...");
+        await db.collection(COLLECTIONS.PRODUCTS).add(sanitizeData(productData));
         
-        setUploadStatus("Uploading...");
-        addLog(`Uploading to ${storagePath}`);
+        addLog("Firestore Write Success.");
+        setUploadStatus("Success!");
         
-        const uploadTask = storageRef.put(fileToUpload, {
-            contentType: 'image/jpeg',
-            customMetadata: { uploader: user.uid }
-        });
-
-        // Safety timeout for upload (Increased to 60s)
-        const uploadTimeout = setTimeout(() => {
-            if (uploadTask.snapshot.state === 'running') {
-                isTimedOut.current = true;
-                uploadTask.cancel();
-                addLog("Upload timed out (60s).");
-                setLoading(false);
-                setUploadStatus("Timed Out");
-                alert("Upload took too long (>60s). \n\nTip: Try enabling 'Skip Image Compression' or check your internet connection.");
-            }
-        }, 60000);
-
-        uploadTask.on(
-            "state_changed",
-            (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                setUploadProgress(progress);
-                setUploadStatus(`Uploading... ${Math.round(progress)}%`);
-            },
-            (error) => {
-                clearTimeout(uploadTimeout);
-                
-                // If we forced the cancel due to timeout, ignore this error callback to avoid double alerts
-                if (isTimedOut.current || error.code === 'storage/canceled') {
-                    addLog("Upload canceled by system or user.");
-                    return; 
-                }
-
-                console.error("Upload error:", error);
-                addLog(`Upload Error: ${error.message}`);
-                setLoading(false);
-                setUploadStatus("Upload failed.");
-                alert(`Upload Failed: ${error.message}`);
-            },
-            async () => {
-                clearTimeout(uploadTimeout);
-                addLog("Upload complete. Getting URL...");
-                setUploadStatus("Saving details...");
-                
-                try {
-                    const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
-                    addLog(`URL: ${downloadURL.substring(0, 20)}...`);
-
-                    // 3. Save to Firestore
-                    const price = formData.isFree ? 0 : Number(formData.price || 0);
-                    const originalPrice = formData.condition === 'used' && formData.originalPrice 
-                        ? Number(formData.originalPrice) 
-                        : null;
-
-                    const productData = {
-                        sellerId: user.uid,
-                        sellerName: profile.displayName || 'Student',
-                        sellerWhatsapp: formData.whatsappNumber || '',
-                        title: formData.title,
-                        description: formData.description || 'No description provided.',
-                        category: formData.category,
-                        condition: formData.condition,
-                        price: price,
-                        originalPrice: originalPrice,
-                        isFree: formData.isFree,
-                        imageUrl: downloadURL,
-                        createdAt: Date.now(),
-                    };
-
-                    addLog("Writing to Firestore...");
-                    // Using sanitize to be safe
-                    await db.collection(COLLECTIONS.PRODUCTS).add(sanitizeData(productData));
-                    
-                    addLog("Firestore Write Success.");
-                    setUploadStatus("Success!");
-                    
-                    // Delay slightly to show success
-                    setTimeout(() => {
-                        navigate('/');
-                    }, 500);
-
-                } catch (dbError: any) {
-                    console.error("Database error:", dbError);
-                    addLog(`DB Error: ${dbError.message}`);
-                    setLoading(false);
-                    alert(`Saved image, but DB failed: ${dbError.message}`);
-                }
-            }
-        );
+        setTimeout(() => {
+            navigate('/');
+        }, 500);
 
     } catch (err: any) {
         console.error("Submission error:", err);
-        addLog(`General Error: ${err.message}`);
+        addLog(`Error: ${err.message}`);
         setLoading(false);
         alert(`Error: ${err.message}`);
     }
   };
+
+  // Default Categories
+  const defaultIcons = [
+      { name: 'Book', url: 'https://cdn-icons-png.flaticon.com/512/3330/3330314.png' },
+      { name: 'Calc', url: 'https://cdn-icons-png.flaticon.com/512/2956/2956799.png' },
+      { name: 'Coat', url: 'https://cdn-icons-png.flaticon.com/512/2038/2038020.png' },
+      { name: 'Draft', url: 'https://cdn-icons-png.flaticon.com/512/2892/2892735.png' },
+      { name: 'Sport', url: 'https://cdn-icons-png.flaticon.com/512/2921/2921932.png' },
+      { name: 'Device', url: 'https://cdn-icons-png.flaticon.com/512/2956/2956799.png' },
+  ];
 
   return (
     <div className="bg-gray-100 min-h-screen py-6 px-4 sm:px-6 lg:px-8">
@@ -434,54 +435,108 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
             />
           </div>
 
-          {/* Image Upload */}
+          {/* --- NEW IMAGE SELECTION TABS --- */}
           <div>
-            <label className="block text-sm font-bold text-gray-700 mb-2">Item Photo</label>
+            <label className="block text-sm font-bold text-gray-700 mb-2">Item Image</label>
             
-            <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md bg-white hover:bg-gray-50 transition-colors cursor-pointer"
-                 onClick={() => fileInputRef.current?.click()}>
-              
-              {imagePreview ? (
-                <div className="relative">
-                   <img src={imagePreview} alt="Preview" className="h-48 object-contain rounded-md" />
-                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 hover:bg-opacity-10 transition-all rounded-md">
-                      <span className="bg-white text-gray-700 text-xs px-2 py-1 rounded shadow opacity-0 hover:opacity-100">Change Photo</span>
-                   </div>
-                </div>
-              ) : (
-                <div className="space-y-1 text-center">
-                  <Upload className="mx-auto h-12 w-12 text-gray-400" />
-                  <div className="text-sm text-gray-600">
-                    <span className="font-medium text-blue-600 hover:text-blue-500">Click to Upload</span>
-                  </div>
-                  <p className="text-xs text-gray-500">JPG, PNG up to 10MB</p>
-                </div>
-              )}
-              <input 
-                type="file" 
-                ref={fileInputRef}
-                className="hidden" 
-                accept="image/*" 
-                onChange={handleImageChange} 
-              />
+            <div className="flex border-b border-gray-200 mb-4">
+                <button
+                   type="button"
+                   onClick={() => setImageMode('upload')}
+                   className={`flex-1 py-2 text-sm font-medium border-b-2 ${imageMode === 'upload' ? 'border-[#febd69] text-black' : 'border-transparent text-gray-500'}`}
+                >
+                    <Upload className="h-4 w-4 inline mr-1"/> Upload
+                </button>
+                <button
+                   type="button"
+                   onClick={() => setImageMode('default')}
+                   className={`flex-1 py-2 text-sm font-medium border-b-2 ${imageMode === 'default' ? 'border-[#febd69] text-black' : 'border-transparent text-gray-500'}`}
+                >
+                    <ImageIcon className="h-4 w-4 inline mr-1"/> Use Icon
+                </button>
+                <button
+                   type="button"
+                   onClick={() => setImageMode('link')}
+                   className={`flex-1 py-2 text-sm font-medium border-b-2 ${imageMode === 'link' ? 'border-[#febd69] text-black' : 'border-transparent text-gray-500'}`}
+                >
+                    <LinkIcon className="h-4 w-4 inline mr-1"/> Link
+                </button>
             </div>
-            
-            {/* Direct Upload Toggle */}
-            {selectedFile && (
-                <div className="mt-2 flex items-center bg-blue-50 p-2 rounded border border-blue-100">
+
+            {/* TAB 1: UPLOAD */}
+            {imageMode === 'upload' && (
+                <div className="space-y-2">
+                    <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md bg-white hover:bg-gray-50 transition-colors cursor-pointer"
+                        onClick={() => fileInputRef.current?.click()}>
+                    
+                    {imagePreview ? (
+                        <div className="relative">
+                        <img src={imagePreview} alt="Preview" className="h-48 object-contain rounded-md" />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 hover:bg-opacity-10 transition-all rounded-md">
+                            <span className="bg-white text-gray-700 text-xs px-2 py-1 rounded shadow opacity-0 hover:opacity-100">Change Photo</span>
+                        </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-1 text-center">
+                        <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                        <div className="text-sm text-gray-600">
+                            <span className="font-medium text-blue-600 hover:text-blue-500">Click to Upload</span>
+                        </div>
+                        <p className="text-xs text-gray-500">JPG, PNG up to 10MB</p>
+                        </div>
+                    )}
                     <input 
-                        type="checkbox"
-                        id="skipCompression"
-                        name="skipCompression"
-                        checked={skipCompression}
-                        onChange={handleCheckboxChange}
-                        className="h-4 w-4 text-blue-600 rounded border-gray-300"
+                        type="file" 
+                        ref={fileInputRef}
+                        className="hidden" 
+                        accept="image/*" 
+                        onChange={handleImageChange} 
                     />
-                    <label htmlFor="skipCompression" className="ml-2 text-xs text-blue-800">
-                        <strong>Having upload issues?</strong> Check this box to skip image optimization (Direct Upload).
-                    </label>
+                    </div>
+                    {selectedFile && (
+                        <div className="flex items-center gap-2 mt-2">
+                            <input type="checkbox" checked={skipCompression} onChange={(e) => setSkipCompression(e.target.checked)} id="skip" />
+                            <label htmlFor="skip" className="text-xs text-gray-600">Skip Optimization (Try this if upload hangs)</label>
+                        </div>
+                    )}
                 </div>
             )}
+
+            {/* TAB 2: DEFAULT ICON */}
+            {imageMode === 'default' && (
+                <div className="grid grid-cols-3 gap-4">
+                    {defaultIcons.map((icon) => (
+                        <div 
+                            key={icon.name}
+                            onClick={() => handleDefaultIconSelect(icon.url)}
+                            className={`p-4 border rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 transition-all ${imagePreview === icon.url ? 'border-[#febd69] bg-yellow-50 ring-2 ring-[#febd69]' : 'border-gray-200'}`}
+                        >
+                            <img src={icon.url} alt={icon.name} className="h-10 w-10 mb-2" />
+                            <span className="text-xs font-medium text-gray-700">{icon.name}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* TAB 3: PASTE LINK */}
+            {imageMode === 'link' && (
+                <div>
+                    <label className="block text-xs text-gray-500 mb-1">Paste image URL (e.g., from Google Drive, Imgur, etc)</label>
+                    <input 
+                        type="text" 
+                        value={externalLink}
+                        onChange={handleLinkChange}
+                        placeholder="https://example.com/image.jpg"
+                        className="w-full border border-gray-300 rounded-md p-2 text-sm"
+                    />
+                    {imagePreview && (
+                         <div className="mt-2 h-32 w-full bg-gray-50 rounded border flex items-center justify-center overflow-hidden">
+                             <img src={imagePreview} alt="Preview" className="h-full object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
+                         </div>
+                    )}
+                </div>
+            )}
+
           </div>
 
           {/* Progress Bar */}
@@ -511,7 +566,7 @@ const SellItem: React.FC<SellItemProps> = ({ user, profile }) => {
         </form>
 
         {/* Status Logs for Debugging */}
-        <div className="mt-8 bg-black text-green-400 p-4 rounded-md text-xs font-mono h-40 overflow-y-auto">
+        <div className="mt-8 bg-black text-green-400 p-4 rounded-md text-xs font-mono h-40 overflow-y-auto hidden">
             <div className="flex items-center mb-2 text-gray-400 border-b border-gray-700 pb-1">
                 <Terminal className="h-3 w-3 mr-2" /> System Status Log
             </div>
