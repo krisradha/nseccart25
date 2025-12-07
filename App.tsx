@@ -136,14 +136,14 @@ const App: React.FC = () => {
   );
 };
 
-const ProtectedRoute = ({
-  user,
-  userProfile,
-  children,
-}: {
+const ProtectedRoute: React.FC<{
   user: User | null;
   userProfile: UserProfile | null;
   children: React.ReactNode;
+}> = ({
+  user,
+  userProfile,
+  children,
 }) => {
   const location = useLocation();
 
