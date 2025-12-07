@@ -104,7 +104,7 @@ const App: React.FC = () => {
               path="/sell"
               element={
                 <ProtectedRoute user={user} userProfile={userProfile}>
-                  <SellItem user={user!} profile={userProfile!} />
+                  <SellItem user={user} profile={userProfile!} />
                 </ProtectedRoute>
               }
             />
@@ -112,7 +112,7 @@ const App: React.FC = () => {
               path="/orders"
               element={
                 <ProtectedRoute user={user} userProfile={userProfile}>
-                  <Orders user={user!} />
+                  <Orders user={user} />
                 </ProtectedRoute>
               }
             />
@@ -136,15 +136,14 @@ const App: React.FC = () => {
   );
 };
 
-interface ProtectedRouteProps {
-  user: User | null;
-  userProfile: UserProfile | null;
-}
-
-const ProtectedRoute: React.FC<React.PropsWithChildren<ProtectedRouteProps>> = ({
+const ProtectedRoute = ({
   user,
   userProfile,
   children,
+}: {
+  user: User | null;
+  userProfile: UserProfile | null;
+  children: React.ReactNode;
 }) => {
   const location = useLocation();
 
