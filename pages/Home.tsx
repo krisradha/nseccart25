@@ -279,7 +279,7 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
         <div className="mt-20 bg-white rounded-2xl p-8 sm:p-12 text-center border border-gray-100 shadow-sm">
             <h3 className="text-2xl font-bold text-gray-900 mb-4">From the Principal's Desk</h3>
             <p className="text-gray-600 max-w-2xl mx-auto italic mb-6 text-lg">
-                "Initiatives like NSEC Cart foster a sense of community and responsibility. By reusing academic resources, we not only help juniors financially but also contribute to a greener, more sustainable campus environment."
+                "Waiting for approval (NSECCART TEAM)."
             </p>
             <div className="flex items-center justify-center gap-4">
                  <div className="h-12 w-12 bg-gray-200 rounded-full overflow-hidden">
@@ -287,7 +287,7 @@ const Home: React.FC<HomeProps> = ({ searchQuery }) => {
                      <span className="h-full w-full flex items-center justify-center text-gray-400 font-bold">P</span>
                  </div>
                  <div className="text-left">
-                     <p className="font-bold text-sm text-gray-900">Prof. (Dr.) Tirthankar Datta</p>
+                     <p className="font-bold text-sm text-gray-900">Prof. (Dr.) Amal Kumar Ghosh</p>
                      <p className="text-xs text-gray-500">Principal, Netaji Subhash Engineering College</p>
                  </div>
             </div>
